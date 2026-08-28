@@ -7,8 +7,10 @@ import pandas as pd
 import re
 import requests # Nodig voor de dagelijkse foto
 
-# 1. API instellen
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+# 1. API instellen en openhouden in het geheugen
+if "client" not in st.session_state:
+    st.session_state.client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+client = st.session_state.client
 
 # Functie om de Picture of the Day op te halen
 @st.cache_data(ttl=43200) # Sla de foto 12 uur op in het geheugen
