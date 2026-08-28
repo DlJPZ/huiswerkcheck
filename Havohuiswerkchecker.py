@@ -5,9 +5,9 @@ import os
 import docx
 import pandas as pd
 import re
-import requests # Nodig voor de dagelijkse foto
+import requests
 
-# 1. API instellen en openhouden in het geheugen
+# 1. API instellen en openhouden in het geheugen (voorkomt "client closed" fout)
 if "client" not in st.session_state:
     st.session_state.client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 client = st.session_state.client
@@ -90,12 +90,12 @@ if "actieve_voornaam" in st.session_state and st.session_state.actieve_voornaam:
     st.sidebar.metric(label="Voorlopig cijfer", value=f"{huidig_cijfer:.1f}")
     
     if st.sidebar.button("📥 Nu Inleveren", type="primary"):
-        # Verzamel laatste AI bericht als beoordeling
         laatste_beoordeling = "Geen verdere feedback."
         if "berichten" in st.session_state and len(st.session_state.berichten) > 0:
             for rol, tekst in reversed(st.session_state.berichten):
                 if rol == "assistant":
-                    laatste_beoordeling = re.sub(r'\[(VOORLOPIG_)?CIJFER:\s*([\-\d\,\.]+)\]', '', tekst).replace("[EINDE_OVERHORING]", "").strip()
+                    veilige_tekst = str(tekst) if tekst is not None else ""
+                    laatste_beoordeling = re.sub(r'\[CIJFER:\s*([\-\d\,\.]+)\]', '', veilige_tekst).replace("[EINDE_OVERHORING]", "").strip()
                     break
         
         sla_resultaat_op(
@@ -177,7 +177,7 @@ Volg EXACT deze chronologische structuur:
    Vraag de leerling expliciet om 'A', 'B' of 'C' te typen. Wacht op het antwoord voor je verdergaat.
 
 **Fase 2: Overhoring (EXACT 5 vragen: 2 reproductie, 3 inzicht)**
-- ZET ONDERAAN ELK BERICHT HET HUIDIGE CIJFER: Dit doe je EXACT als volgt: [VOORLOPIG_CIJFER: X] (waarbij X het huidige cijfer is). Start op 10.0.
+- ZET ONDERAAN ELK BERICHT HET HUIDIGE CIJFER: Dit doe je EXACT als volgt: [CIJFER: X] (waarbij X het huidige cijfer is). Start op 10.0.
 - STOPPEN: Kiest de leerling optie C of typt hij "stop"? Breek alles dan af! Zeg UITSLUITEND: "Ga de stof nogmaals bestuderen en probeer het dan nog eens! [EINDE_OVERHORING]"
 - CIJFER BIJHOUDEN: Start op 10.0. Helemaal fout = -2. Spelfout = -0.5 (max -2 aftrek voor spelling in totaal). Cijfer mag negatief zijn.
 - COULANT NAKIJKEN (HUISWERKCONTROLE): Dit is een huiswerkcontrole, geen formele toets. Reken een antwoord GOED (geen aftrek) als de leerling laat zien dat hij/zij het snapt, zelfs als het antwoord niet helemáál volledig is. Geef in dat geval wél direct als feedback wat het volledige antwoord had moeten zijn, en ga daarna door naar de volgende vraag.
@@ -192,25 +192,31 @@ Volg EXACT deze chronologische structuur:
    [A] Ik heb het helemaal op eigen kracht gedaan.
    [B] Ik heb helaas vals moeten spelen om het te halen.
    Vraag de leerling om 'A' of 'B' te typen en wacht op antwoord.
-2. Na hun antwoord: Geef gerichte feedback en laat de score-berekening zien.
-3. Sluit je bericht af met EXACT: [EINDE_OVERHORING].
+2. Na hun antwoord: Geef gerichte feedback en laat de score-berekening zien. Zorg dat ook in dit laatste bericht de code [CIJFER: X] staat.
+3. Sluit je allerlaatste bericht af met EXACT: [EINDE_OVERHORING].
 """
                 try:
                     chat = client.chats.create(model="gemini-3.5-flash-lite")
                     st.session_state.chat = chat
                     response = chat.send_message(eerste_input)
-                    st.session_state.berichten.append(("assistant", response.text))
+                    
+                    veilige_start_tekst = str(response.text) if response.text else "⚠️ *[Fout: AI gaf geen welkomstbericht.]*"
+                    st.session_state.berichten.append(("assistant", veilige_start_tekst))
                 except Exception as e:
                     st.error(f"🚨 Fout bij het starten van de AI-docent: {e}")
-                    st.info("Tip: Controleer of je API-key correct is ingesteld in de Streamlit Secrets.")
+                    st.info("Tip: Controleer of je API-key correct is ingesteld.")
                     st.session_state.chat = None
                     st.stop()
 
         if "berichten" in st.session_state:
             for role, text in st.session_state.berichten:
                 avatar_icoon = "🧑‍🏫" if role == "assistant" else "🎓"
+                
+                # VANGNET 1: Zorg dat text ALTIJD een string is, voorkomt TypeErrors!
+                veilige_tekst = str(text) if text is not None else "⚠️ *[Systeem hapering: De AI docent stuurde een leeg bericht.]*"
+                
                 # Verberg de tags voor de gebruiker
-                weergave_tekst = re.sub(r'\[(VOORLOPIG_)?CIJFER:\s*([\-\d\,\.]+)\]', '', text)
+                weergave_tekst = re.sub(r'\[CIJFER:\s*([\-\d\,\.]+)\]', '', veilige_tekst)
                 weergave_tekst = weergave_tekst.replace("[EINDE_OVERHORING]", "")
                 with st.chat_message(role, avatar=avatar_icoon):
                     st.markdown(weergave_tekst.strip())
@@ -225,23 +231,24 @@ Volg EXACT deze chronologische structuur:
             with st.spinner("De docent schrijft een reactie..."):
                 try:
                     vervolg_response = st.session_state.chat.send_message(prompt)
-                    output_tekst = vervolg_response.text
+                    # VANGNET 2: Forceer text formaat
+                    output_tekst = str(vervolg_response.text) if vervolg_response.text else "⚠️ *[Het antwoord van de AI was leeg. Probeer het nog eens!]*"
                 except Exception as e:
                     st.error(f"🚨 Oeps, de verbinding met de AI haperde even: {e}")
                     st.stop()
             
             st.session_state.berichten.append(("assistant", output_tekst))
             
-            # Controleer of er een voorlopig cijfer in zit
-            cijfer_match = re.search(r'\[VOORLOPIG_CIJFER:\s*([\-\d\,\.]+)\]', output_tekst)
+            # Controleer het nieuwe cijfer in de achtergrond
+            cijfer_match = re.search(r'\[CIJFER:\s*([\-\d\,\.]+)\]', output_tekst)
             if cijfer_match:
                 try:
                     st.session_state.huidig_cijfer = float(cijfer_match.group(1).replace(',', '.'))
                 except ValueError:
                     pass
 
-            # Opschonen voor weergave
-            weergave_tekst_bot = re.sub(r'\[(VOORLOPIG_)?CIJFER:\s*([\-\d\,\.]+)\]', '', output_tekst)
+            # Opschonen voor weergave in de chat
+            weergave_tekst_bot = re.sub(r'\[CIJFER:\s*([\-\d\,\.]+)\]', '', output_tekst)
             weergave_tekst_bot = weergave_tekst_bot.replace("[EINDE_OVERHORING]", "")
             
             with st.chat_message("assistant", avatar="🧑‍🏫"):
@@ -263,7 +270,7 @@ Volg EXACT deze chronologische structuur:
                     else:
                         st.success("✅ Je resultaten zijn automatisch opgeslagen. Volgende keer gaat het vast beter!")
             
-            # Trik om de UI te updaten (cijfer in zijbalk)
+            # Truc om de UI te updaten (zodat het cijfer in de zijbalk vernieuwt)
             st.rerun()
 
 # --- DOCENTENPANEEL ---
