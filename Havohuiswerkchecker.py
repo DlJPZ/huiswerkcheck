@@ -196,7 +196,7 @@ Volg EXACT deze chronologische structuur:
 3. Sluit je bericht af met EXACT: [EINDE_OVERHORING].
 """
                 try:
-                    chat = client.chats.create("gemini-3.5-flash-lite")
+                    chat = client.chats.create(model="gemini-3.5-flash-lite")
                     st.session_state.chat = chat
                     response = chat.send_message(eerste_input)
                     st.session_state.berichten.append(("assistant", response.text))
