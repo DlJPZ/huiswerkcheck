@@ -718,8 +718,7 @@ if "actieve_voornaam" in st.session_state and st.session_state.actieve_voornaam:
 st.sidebar.divider()
 st.sidebar.header("👨‍🏫 Docentenpaneel")
 
-wachtwoord = st.sidebar.text_input("Wachtwoord docent:", type="password")
-
+wachtwoord = st.sidebar.text_input("Wachtwoord docent:", type="password", key="docent_wachtwoord_uniek")
 if wachtwoord == "PieterZandt2026!": 
     
     st.sidebar.subheader("📊 Resultaten Beheren")
