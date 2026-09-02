@@ -566,7 +566,8 @@ Volg EXACT deze chronologische structuur:
                 else:
                     gebruikers[st.session_state.gebruikersnaam]["WachtwoordHash"] = hash_wachtwoord(nieuw_ww)
                     bewaar_alle_gebruikers(gebruikers)
-                    st.success("Je wachtwoord is succesvol gewijzigd!")mport datetime
+                    st.success("Je wachtwoord is succesvol gewijzigd!")
+import datetime
 import os
 import docx
 import pandas as pd
