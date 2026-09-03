@@ -39,15 +39,15 @@ gebruik_gsheets = False
 try:
     if "GCP_JSON" in st.secrets and "GSHEET_URL" in st.secrets:
         creds_dict = json.loads(st.secrets["GCP_JSON"])
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gspread_client = gspread.authorize(creds)
         sheet_url = st.secrets["GSHEET_URL"]
         google_doc = gspread_client.open_by_url(sheet_url)
         worksheet = google_doc.sheet1
         gebruik_gsheets = True
-except Exception:
-    pass
+except Exception as e:
+    st.error(f"🚨 Google Sheets Connectie Fout: {e}")
 
 # Functie om de Picture of the Day op te halen
 @st.cache_data(ttl=43200)
@@ -139,6 +139,10 @@ def kleur_onvoldoendes(row):
     return [''] * len(row)
 
 def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cijfer, beoordeling):
+    if st.session_state.get("toets_ingeleverd", False):
+        return
+    st.session_state.toets_ingeleverd = True
+    
     tijdstip = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
     poging_id = str(uuid.uuid4())[:8] 
     
@@ -167,8 +171,8 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
         try:
             rij = [poging_id, tijdstip, niveau, cluster, gebruikersnaam, voornaam, gekozen_les, cijfer, beoordeling, "", "True"]
             worksheet.append_row(rij)
-        except Exception:
-            pass
+        except Exception as e:
+            st.error(f"🚨 Fout bij schrijven naar Sheets: {e}")
 
     # 3. Lokaal CSV (Veilige Back-up)
     backup_bestand = "backup_resultaten.csv"
@@ -704,6 +708,7 @@ elif st.session_state.get("rol") == "leerling":
                         st.session_state.berichten = [] 
                         st.session_state.chat = None
                         st.session_state.huidig_cijfer = 0.0
+                        st.session_state.toets_ingeleverd = False
                         
                         les_pad = os.path.join(les_map, gekozen_les)
                         les_tekst = lees_docx(les_pad) if os.path.exists(les_pad) else ""
