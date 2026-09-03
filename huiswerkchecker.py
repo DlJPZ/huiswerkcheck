@@ -10,10 +10,10 @@ import csv
 import hashlib
 import uuid
 
-# 0. Paginainstellingen (Zonder page_icon)
+# 0. Paginainstellingen
 st.set_page_config(page_title="Huiswerkcontrole AK")
 
-# 1. API instellen (Gebruikt de nieuwe google-genai SDK)
+# 1. API instellen
 if "client" not in st.session_state:
     st.session_state.client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 client = st.session_state.client
@@ -63,13 +63,38 @@ NIVEAUS = {
 }
 ALLE_CLUSTERS = NIVEAUS["Havo"] + NIVEAUS["VWO"]
 
-for niv, klassen in NIVEAUS.items():
-    for klas in klassen:
-        pad = os.path.join("lesmateriaal", niv, klas)
+# Koppeling van clusters aan het juiste leerjaar
+LEERJAREN_CLUSTERS = {
+    "4Havo": ["4Hak1", "4Hak2", "4Hak3", "4Hak4"],
+    "5Havo": ["5Hak1", "5Hak2", "5Hak3"],
+    "4VWO": ["4Vak1"],
+    "5VWO": ["5Vak1", "5Vak2"],
+    "6VWO": ["6Vak1"]
+}
+
+# De nieuwe centrale hoofdstukken structuur
+HOOFDSTUKKEN = {
+    "4Havo": ["H4H1", "H4H2", "H4H3", "H4H4", "H5H1"],
+    "5Havo": ["H5H2", "H5H3", "HExamentraining"],
+    "4VWO": ["V5H1", "V5H2", "V5H3", "V5H4"],
+    "5VWO": ["V4H1", "V4H2", "V4H3", "V6H1"],
+    "6VWO": ["V6H2", "V6H3", "VExamentraining"]
+}
+
+# Maak de mappen aan op de achtergrond
+for leerjaar, hst_lijst in HOOFDSTUKKEN.items():
+    for hst in hst_lijst:
+        pad = os.path.join("lesmateriaal", leerjaar, hst)
         if not os.path.exists(pad):
             os.makedirs(pad)
 
 # --- HELPER FUNCTIES ---
+def get_leerjaar(cluster_naam):
+    for lj, clusters in LEERJAREN_CLUSTERS.items():
+        if cluster_naam in clusters:
+            return lj
+    return None
+
 def lees_docx(file_path):
     doc = docx.Document(file_path)
     return "\n".join([para.text for para in doc.paragraphs])
@@ -127,6 +152,7 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
             styled_df = df_sheet.style.apply(kleur_onvoldoendes, axis=1)
             styled_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
+
 # --- ACCOUNT FUNCTIES ---
 def hash_wachtwoord(wachtwoord):
     return hashlib.sha256(wachtwoord.encode()).hexdigest()
@@ -137,7 +163,6 @@ def is_sterk_wachtwoord(wachtwoord):
     if not re.search(r'[^a-zA-Z0-9]', wachtwoord): return False, "Minimaal 1 speciaal teken vereist."
     return True, ""
 
-# LEERLINGEN CSV
 def laad_gebruikers():
     gebruikers_bestand = "gebruikers.csv"
     users = {}
@@ -160,31 +185,33 @@ def bewaar_alle_gebruikers(users_dict):
         writer.writeheader()
         writer.writerows(users_dict.values())
 
-# DOCENTEN CSV
 def laad_docenten():
     docenten_bestand = "docenten.csv"
     docs = {}
     if not os.path.exists(docenten_bestand):
         with open(docenten_bestand, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, delimiter=";")
-            writer.writerow(["DocentID", "WachtwoordHash", "Naam", "Klassen"])
+            writer.writerow(["DocentID", "WachtwoordHash", "Naam", "Klassen", "Goedgekeurd"])
         return docs
     with open(docenten_bestand, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter=";")
         for row in reader:
             if "DocentID" in row:
                 row["Klassen"] = row["Klassen"].split(",") if row["Klassen"] else []
+                if "Goedgekeurd" not in row:
+                    row["Goedgekeurd"] = "Ja" 
                 docs[row["DocentID"]] = row
     return docs
 
 def bewaar_alle_docenten(docs_dict):
     with open("docenten.csv", "w", newline="", encoding="utf-8") as f:
-        fieldnames = ["DocentID", "WachtwoordHash", "Naam", "Klassen"]
+        fieldnames = ["DocentID", "WachtwoordHash", "Naam", "Klassen", "Goedgekeurd"]
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
         for doc_id, doc_data in docs_dict.items():
             save_data = doc_data.copy()
-            save_data["Klassen"] = ",".join(save_data["Klassen"])
+            if isinstance(save_data["Klassen"], list):
+                save_data["Klassen"] = ",".join(save_data["Klassen"])
             writer.writerow(save_data)
 
 
@@ -233,7 +260,7 @@ if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docen
     st.sidebar.header("👨‍🏫 Docentenpaneel")
     
     if not st.session_state.get("ingelogd"):
-        tab_d_inlog, tab_d_reg = st.sidebar.tabs(["Inloggen", "Registreren"])
+        tab_d_inlog, tab_d_reg, tab_admin = st.sidebar.tabs(["Inloggen", "Registreren", "⚙️ Admin"])
         
         with tab_d_inlog:
             d_login = st.text_input("Docent Gebruikersnaam:", key="d_login")
@@ -241,12 +268,15 @@ if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docen
             if st.button("Log in als docent"):
                 docs = laad_docenten()
                 if d_login in docs and docs[d_login]["WachtwoordHash"] == hash_wachtwoord(d_ww):
-                    st.session_state.ingelogd = True
-                    st.session_state.rol = "docent"
-                    st.session_state.docent_id = d_login
-                    st.session_state.docent_naam = docs[d_login]["Naam"]
-                    st.session_state.docent_klassen = docs[d_login]["Klassen"]
-                    st.rerun()
+                    if docs[d_login].get("Goedgekeurd") == "Ja":
+                        st.session_state.ingelogd = True
+                        st.session_state.rol = "docent"
+                        st.session_state.docent_id = d_login
+                        st.session_state.docent_naam = docs[d_login]["Naam"]
+                        st.session_state.docent_klassen = docs[d_login]["Klassen"]
+                        st.rerun()
+                    else:
+                        st.error("Je account wacht nog op goedkeuring van de beheerder.")
                 else:
                     st.error("Onjuiste inloggegevens.")
                     
@@ -269,10 +299,38 @@ if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docen
                             "DocentID": reg_d_login,
                             "WachtwoordHash": hash_wachtwoord(reg_d_ww),
                             "Naam": reg_d_naam,
-                            "Klassen": reg_d_klassen
+                            "Klassen": reg_d_klassen,
+                            "Goedgekeurd": "Nee"
                         }
                         bewaar_alle_docenten(docs)
-                        st.success("Account gemaakt! Je kunt nu inloggen.")
+                        st.success("Account gemaakt! Je account moet nog worden goedgekeurd door de beheerder.")
+        
+        with tab_admin:
+            st.write("**Beheerderstoegang**")
+            admin_ww = st.text_input("Master Wachtwoord:", type="password")
+            if admin_ww == "PieterZandt2026!":
+                st.write("---")
+                st.write("**Aanvragen Docentenaccounts**")
+                docs = laad_docenten()
+                te_keuren = {k: v for k, v in docs.items() if v.get("Goedgekeurd") == "Nee"}
+                
+                if not te_keuren:
+                    st.info("Er zijn geen openstaande aanvragen.")
+                else:
+                    for d_id, d_info in te_keuren.items():
+                        st.write(f"👨‍🏫 **{d_info['Naam']}** ({d_id})")
+                        st.caption(f"Klassen: {', '.join(d_info['Klassen'])}")
+                        col1, col2 = st.columns(2)
+                        if col1.button("✅ Goedkeuren", key=f"ok_{d_id}"):
+                            docs[d_id]["Goedgekeurd"] = "Ja"
+                            bewaar_alle_docenten(docs)
+                            st.success(f"{d_info['Naam']} goedgekeurd!")
+                            st.rerun()
+                        if col2.button("❌ Weigeren", key=f"del_{d_id}"):
+                            del docs[d_id]
+                            bewaar_alle_docenten(docs)
+                            st.warning("Account verwijderd.")
+                            st.rerun()
 
     # ALS DOCENT IS INGELOGD
     elif st.session_state.get("rol") == "docent":
@@ -283,12 +341,10 @@ if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docen
             
         mijn_klassen = st.session_state.docent_klassen
         
-        # FIX: 'niet' veranderd naar 'not'
         if not mijn_klassen:
             st.sidebar.warning("Je hebt geen klassen geselecteerd.")
         else:
             docent_klas = st.sidebar.selectbox("Kies een van jouw klassen:", mijn_klassen)
-            
             docent_actie = st.sidebar.radio("Wat wil je doen?", ["📊 Resultaten & Feedback", "📋 Wie heeft het gemaakt?", "📄 Lesmateriaal Uploaden"])
             
             alle_gebruikers = laad_gebruikers()
@@ -340,43 +396,48 @@ if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docen
                     
             elif docent_actie == "📋 Wie heeft het gemaakt?":
                 st.sidebar.write("**Controleer inleveringen**")
-                
-                niv_klas = "Havo" if docent_klas in NIVEAUS["Havo"] else "VWO"
-                les_map = os.path.join("lesmateriaal", niv_klas, docent_klas)
-                beschikbare_bestanden = [f for f in os.listdir(les_map) if f.endswith('.docx')] if os.path.exists(les_map) else []
-                
-                if beschikbare_bestanden:
-                    check_les = st.sidebar.selectbox("Kies de paragraaf/les:", beschikbare_bestanden)
-                    
-                    if st.sidebar.button("Check status"):
-                        gemaakt_gn = set()
-                        if os.path.exists("backup_resultaten.csv"):
-                            df_check = pd.read_csv("backup_resultaten.csv", delimiter=";")
-                            if "Gebruikersnaam" in df_check.columns and "Les" in df_check.columns:
-                                gelukt = df_check[(df_check["Cluster"] == docent_klas) & (df_check["Les"] == check_les)]
-                                gemaakt_gn = set(gelukt["Gebruikersnaam"].dropna().tolist())
-                        
-                        alle_gn_in_klas = set(leerlingen_in_klas.keys())
-                        niet_gemaakt_gn = alle_gn_in_klas - gemaakt_gn
-                        
-                        st.sidebar.success(f"✅ **Gemaakt ({len(gemaakt_gn)}):**")
-                        for gn in gemaakt_gn:
-                            if gn in leerlingen_in_klas: st.sidebar.write(f"- {leerlingen_in_klas[gn]}")
-                            
-                        st.sidebar.error(f"❌ **Nog NIET gemaakt ({len(niet_gemaakt_gn)}):**")
-                        for gn in niet_gemaakt_gn:
-                            st.sidebar.write(f"- {leerlingen_in_klas[gn]}")
+                lj = get_leerjaar(docent_klas)
+                if not lj:
+                    st.sidebar.error("Geen leerjaar gevonden voor deze klas.")
                 else:
-                    st.sidebar.info("Geen lesmateriaal in deze map.")
+                    check_hst = st.sidebar.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[lj])
+                    les_map = os.path.join("lesmateriaal", lj, check_hst)
+                    beschikbare_bestanden = [f for f in os.listdir(les_map) if f.endswith('.docx')] if os.path.exists(les_map) else []
+                    
+                    if beschikbare_bestanden:
+                        check_les = st.sidebar.selectbox("Kies de les:", beschikbare_bestanden)
+                        
+                        if st.sidebar.button("Check status"):
+                            gemaakt_gn = set()
+                            if os.path.exists("backup_resultaten.csv"):
+                                df_check = pd.read_csv("backup_resultaten.csv", delimiter=";")
+                                if "Gebruikersnaam" in df_check.columns and "Les" in df_check.columns:
+                                    gelukt = df_check[(df_check["Cluster"] == docent_klas) & (df_check["Les"] == check_les)]
+                                    gemaakt_gn = set(gelukt["Gebruikersnaam"].dropna().tolist())
+                            
+                            alle_gn_in_klas = set(leerlingen_in_klas.keys())
+                            niet_gemaakt_gn = alle_gn_in_klas - gemaakt_gn
+                            
+                            st.sidebar.success(f"✅ **Gemaakt ({len(gemaakt_gn)}):**")
+                            for gn in gemaakt_gn:
+                                if gn in leerlingen_in_klas: st.sidebar.write(f"- {leerlingen_in_klas[gn]}")
+                                
+                            st.sidebar.error(f"❌ **Nog NIET gemaakt ({len(niet_gemaakt_gn)}):**")
+                            for gn in niet_gemaakt_gn:
+                                st.sidebar.write(f"- {leerlingen_in_klas[gn]}")
+                    else:
+                        st.sidebar.info("Geen lesmateriaal in deze map.")
 
             elif docent_actie == "📄 Lesmateriaal Uploaden":
-                niv_klas = "Havo" if docent_klas in NIVEAUS["Havo"] else "VWO"
-                upload_map = os.path.join("lesmateriaal", niv_klas, docent_klas)
-                uploaded_file = st.sidebar.file_uploader(f"Upload les voor {docent_klas} (.docx)", type=["docx"])
+                up_leerjaar = st.sidebar.selectbox("Kies leerjaar:", list(HOOFDSTUKKEN.keys()))
+                up_hst = st.sidebar.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar])
+                upload_map = os.path.join("lesmateriaal", up_leerjaar, up_hst)
+                
+                uploaded_file = st.sidebar.file_uploader(f"Upload les (.docx)", type=["docx"])
                 if uploaded_file is not None:
                     with open(os.path.join(upload_map, uploaded_file.name), "wb") as f:
                         f.write(uploaded_file.getbuffer())
-                    st.sidebar.success(f"✅ '{uploaded_file.name}' geüpload!")
+                    st.sidebar.success(f"✅ '{uploaded_file.name}' geüpload naar {up_leerjaar}/{up_hst}!")
                     if st.sidebar.button("Vernieuw app"): st.rerun()
 
 
@@ -424,7 +485,6 @@ if not st.session_state.get("ingelogd"):
                     gebruikers = laad_gebruikers()
                     if reg_gn in gebruikers: st.error("Inlognaam al bezet.")
                     else:
-                        # FIX: Logica om de leerling direct aan te maken en op te slaan
                         gebruikers[reg_gn] = {
                             "Gebruikersnaam": reg_gn,
                             "WachtwoordHash": hash_wachtwoord(reg_ww),
@@ -456,27 +516,34 @@ elif st.session_state.get("rol") == "leerling":
     tab_oefen, tab_geschiedenis, tab_instellingen = st.tabs(["🗺️ Oefenen", "📊 Mijn Resultaten", "⚙️ Instellingen"])
     
     with tab_oefen:
-        les_map = os.path.join("lesmateriaal", st.session_state.niveau, st.session_state.cluster)
-        beschikbare_bestanden = [f for f in os.listdir(les_map) if f.endswith('.docx')] if os.path.exists(les_map) else []
-
-        if not beschikbare_bestanden:
-            st.warning("Geen lesmateriaal beschikbaar voor jouw klas.")
+        st.write(f"Klas: **{st.session_state.cluster}**")
+        lj = get_leerjaar(st.session_state.cluster)
+        
+        if not lj:
+            st.error("Oeps, we konden je klas niet koppelen aan een leerjaar.")
         else:
-            gekozen_les = st.selectbox("Kies de les die je wilt oefenen:", beschikbare_bestanden)
-            st.divider()
+            kies_hst = st.selectbox("1. Kies het hoofdstuk:", HOOFDSTUKKEN[lj])
+            les_map = os.path.join("lesmateriaal", lj, kies_hst)
+            beschikbare_bestanden = [f for f in os.listdir(les_map) if f.endswith('.docx')] if os.path.exists(les_map) else []
 
-            if gekozen_les:
-                if ("huidige_les" not in st.session_state or st.session_state.huidige_les != gekozen_les):
-                    st.session_state.huidige_les = gekozen_les
-                    st.session_state.berichten = [] 
-                    st.session_state.chat = None
-                    st.session_state.huidig_cijfer = 0.0
-                    
-                    les_pad = os.path.join(les_map, gekozen_les)
-                    les_tekst = lees_docx(les_pad) if os.path.exists(les_pad) else ""
+            if not beschikbare_bestanden:
+                st.warning("Er is nog geen lesmateriaal beschikbaar voor dit hoofdstuk.")
+            else:
+                gekozen_les = st.selectbox("2. Kies de les die je wilt oefenen:", beschikbare_bestanden)
+                st.divider()
 
-                    if les_tekst:
-                        eerste_input = f"""Je bent docent aardrijkskunde (bovenbouw {st.session_state.niveau}). Toon: professioneel, zakelijk, aanmoedigend. Spreek de leerling aan met {st.session_state.voornaam}.
+                if gekozen_les:
+                    if ("huidige_les" not in st.session_state or st.session_state.huidige_les != gekozen_les):
+                        st.session_state.huidige_les = gekozen_les
+                        st.session_state.berichten = [] 
+                        st.session_state.chat = None
+                        st.session_state.huidig_cijfer = 0.0
+                        
+                        les_pad = os.path.join(les_map, gekozen_les)
+                        les_tekst = lees_docx(les_pad) if os.path.exists(les_pad) else ""
+
+                        if les_tekst:
+                            eerste_input = f"""Je bent docent aardrijkskunde (bovenbouw {st.session_state.niveau}). Toon: professioneel, zakelijk, aanmoedigend. Spreek de leerling aan met {st.session_state.voornaam}.
 Baseer de ONDERWERPEN op de theorie. Geef NOOIT zelf direct het antwoord (behalve als een leerling een vraag definitief fout heeft).
 --- START THEORIE ---
 {les_tekst}
@@ -499,43 +566,43 @@ Volg EXACT deze chronologische structuur:
 2. Geef feedback en code [CIJFER: X].
 3. Docent-analyse: [DOCENTEN_FEEDBACK: Max 2 zinnen sterke/zwakke kanten].
 4. Sluit af met: [EINDE_OVERHORING]."""
-                        try:
-                            st.session_state.chat = client.chats.create(model="gemini-3.5-flash-lite")
-                            response = st.session_state.chat.send_message(eerste_input)
-                            st.session_state.berichten.append(("assistant", str(response.text)))
-                        except Exception:
-                            st.error("🚨 Fout bij het starten van de AI-docent.")
+                            try:
+                                st.session_state.chat = client.chats.create(model="gemini-3.5-flash-lite")
+                                response = st.session_state.chat.send_message(eerste_input)
+                                st.session_state.berichten.append(("assistant", str(response.text)))
+                            except Exception:
+                                st.error("🚨 Fout bij het starten van de AI-docent.")
 
-                for role, text in st.session_state.get("berichten", []):
-                    weergave_tekst = re.sub(r'\[CIJFER:\s*([\-\d\,\.]+)\]', '', str(text))
-                    weergave_tekst = re.sub(r'\[DOCENTEN_FEEDBACK:.*?\]', '', weergave_tekst, flags=re.DOTALL)
-                    weergave_tekst = weergave_tekst.replace("[EINDE_OVERHORING]", "")
-                    with st.chat_message(role, avatar="🧑‍🏫" if role == "assistant" else "🎓"):
-                        st.markdown(weergave_tekst.strip())
+                    for role, text in st.session_state.get("berichten", []):
+                        weergave_tekst = re.sub(r'\[CIJFER:\s*([\-\d\,\.]+)\]', '', str(text))
+                        weergave_tekst = re.sub(r'\[DOCENTEN_FEEDBACK:.*?\]', '', weergave_tekst, flags=re.DOTALL)
+                        weergave_tekst = weergave_tekst.replace("[EINDE_OVERHORING]", "")
+                        with st.chat_message(role, avatar="🧑‍🏫" if role == "assistant" else "🎓"):
+                            st.markdown(weergave_tekst.strip())
 
-                prompt = st.chat_input("Typ hier je antwoord...")
-                if prompt and st.session_state.chat:
-                    st.session_state.berichten.append(("user", prompt))
-                    st.rerun() 
-                    
-                if st.session_state.get("berichten") and st.session_state.berichten[-1][0] == "user":
-                    laatste_prompt = st.session_state.berichten[-1][1]
-                    with st.spinner("De docent typt..."):
-                        try:
-                            resp = st.session_state.chat.send_message(laatste_prompt)
-                            out_tekst = str(resp.text)
-                            st.session_state.berichten.append(("assistant", out_tekst))
-                            
-                            m = re.search(r'\[CIJFER:\s*([\-\d\,\.]+)\]', out_tekst)
-                            if m: st.session_state.huidig_cijfer = float(m.group(1).replace(',', '.'))
-                            
-                            if "[EINDE_OVERHORING]" in out_tekst:
-                                f_match = re.search(r'\[DOCENTEN_FEEDBACK:\s*(.*?)\]', out_tekst, re.DOTALL)
-                                ai_beoordeling = f_match.group(1).strip() if f_match else "Toets afgerond."
-                                sla_resultaat_op(st.session_state.niveau, st.session_state.cluster, st.session_state.voornaam, st.session_state.gebruikersnaam, gekozen_les, st.session_state.huidig_cijfer, ai_beoordeling)
-                            st.rerun()
-                        except Exception as e:
-                            st.error("🚨 Verbinding haperde.")
+                    prompt = st.chat_input("Typ hier je antwoord...")
+                    if prompt and st.session_state.chat:
+                        st.session_state.berichten.append(("user", prompt))
+                        st.rerun() 
+                        
+                    if st.session_state.get("berichten") and st.session_state.berichten[-1][0] == "user":
+                        laatste_prompt = st.session_state.berichten[-1][1]
+                        with st.spinner("De docent typt..."):
+                            try:
+                                resp = st.session_state.chat.send_message(laatste_prompt)
+                                out_tekst = str(resp.text)
+                                st.session_state.berichten.append(("assistant", out_tekst))
+                                
+                                m = re.search(r'\[CIJFER:\s*([\-\d\,\.]+)\]', out_tekst)
+                                if m: st.session_state.huidig_cijfer = float(m.group(1).replace(',', '.'))
+                                
+                                if "[EINDE_OVERHORING]" in out_tekst:
+                                    f_match = re.search(r'\[DOCENTEN_FEEDBACK:\s*(.*?)\]', out_tekst, re.DOTALL)
+                                    ai_beoordeling = f_match.group(1).strip() if f_match else "Toets afgerond."
+                                    sla_resultaat_op(st.session_state.niveau, st.session_state.cluster, st.session_state.voornaam, st.session_state.gebruikersnaam, gekozen_les, st.session_state.huidig_cijfer, ai_beoordeling)
+                                st.rerun()
+                            except Exception as e:
+                                st.error("🚨 Verbinding haperde.")
 
     with tab_geschiedenis:
         st.subheader("Mijn Resultaten & Feedback")
