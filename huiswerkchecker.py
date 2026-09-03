@@ -20,7 +20,12 @@ st.set_page_config(page_title="Huiswerkcontrole AK")
 
 # 1. API & Cloud instellen
 if "client" not in st.session_state:
-    st.session_state.client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    from google.genai import types
+    mijn_sleutel = st.secrets["GEMINI_API_KEY"]
+    st.session_state.client = genai.Client(
+        api_key=mijn_sleutel,
+        http_options=types.HttpOptions(headers={"x-goog-api-key": mijn_sleutel})
+    )
 client = st.session_state.client
 
 # Supabase Connectie (met automatische fallback)
