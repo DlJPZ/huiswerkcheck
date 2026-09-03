@@ -59,9 +59,12 @@ st.markdown(achtergrond_css, unsafe_allow_html=True)
 # --- STRUCTUUR DEFINIËREN & MAPPEN AANMAKEN ---
 NIVEAUS = {
     "Havo": ["4Hak1", "4Hak2", "4Hak3", "4Hak4", "5Hak1", "5Hak2", "5Hak3"],
-    "VWO": ["4Vak1", "5Vak1", "5Vak2", "6Vak1"]
+    "VWO": ["4Vak1", "5Vak1", "5Vak2", "6Vak1"],
+    "Test": ["testklas"]
 }
-ALLE_CLUSTERS = NIVEAUS["Havo"] + NIVEAUS["VWO"]
+
+# Genereer automatisch een lijst van álle clusters
+ALLE_CLUSTERS = [klas for klassen in NIVEAUS.values() for klas in klassen]
 
 # Koppeling van clusters aan het juiste leerjaar
 LEERJAREN_CLUSTERS = {
@@ -69,7 +72,8 @@ LEERJAREN_CLUSTERS = {
     "5Havo": ["5Hak1", "5Hak2", "5Hak3"],
     "4VWO": ["4Vak1"],
     "5VWO": ["5Vak1", "5Vak2"],
-    "6VWO": ["6Vak1"]
+    "6VWO": ["6Vak1"],
+    "Testjaar": ["testklas"]
 }
 
 # De nieuwe centrale hoofdstukken structuur
@@ -78,7 +82,8 @@ HOOFDSTUKKEN = {
     "5Havo": ["H5H2", "H5H3", "HExamentraining"],
     "4VWO": ["V5H1", "V5H2", "V5H3", "V5H4"],
     "5VWO": ["V4H1", "V4H2", "V4H3", "V6H1"],
-    "6VWO": ["V6H2", "V6H3", "VExamentraining"]
+    "6VWO": ["V6H2", "V6H3", "VExamentraining"],
+    "Testjaar": ["TestMap"]
 }
 
 # Maak de mappen aan op de achtergrond
@@ -152,7 +157,6 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
             styled_df = df_sheet.style.apply(kleur_onvoldoendes, axis=1)
             styled_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-
 # --- ACCOUNT FUNCTIES ---
 def hash_wachtwoord(wachtwoord):
     return hashlib.sha256(wachtwoord.encode()).hexdigest()
@@ -163,6 +167,7 @@ def is_sterk_wachtwoord(wachtwoord):
     if not re.search(r'[^a-zA-Z0-9]', wachtwoord): return False, "Minimaal 1 speciaal teken vereist."
     return True, ""
 
+# LEERLINGEN CSV
 def laad_gebruikers():
     gebruikers_bestand = "gebruikers.csv"
     users = {}
@@ -185,6 +190,7 @@ def bewaar_alle_gebruikers(users_dict):
         writer.writeheader()
         writer.writerows(users_dict.values())
 
+# DOCENTEN CSV MET GOEDKEURINGS-KOLOM
 def laad_docenten():
     docenten_bestand = "docenten.csv"
     docs = {}
@@ -254,7 +260,7 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "leerling
         st.rerun()
 
 
-# --- ZIJBALK: DOCENTENPANEEL ---
+# --- ZIJBALK: DOCENTENPANEEL (MET ADMIN LAAG) ---
 if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docent":
     st.sidebar.divider()
     st.sidebar.header("👨‍🏫 Docentenpaneel")
@@ -470,8 +476,10 @@ if not st.session_state.get("ingelogd"):
         st.warning("⚠️ **Privacy Waarschuwing:** Gebruik **géén herleidbare persoonsgegevens** (achternaam/geboortedatum) in je inlognaam of wachtwoord.")
         reg_voornaam = st.text_input("Wat is je voornaam?")
         col1, col2 = st.columns(2)
-        with col1: reg_niveau = st.selectbox("Jouw niveau:", ["Havo", "VWO"])
-        with col2: reg_cluster = st.selectbox("Jouw klas:", NIVEAUS[reg_niveau])
+        with col1: 
+            reg_niveau = st.selectbox("Jouw niveau:", list(NIVEAUS.keys()))
+        with col2: 
+            reg_cluster = st.selectbox("Jouw klas:", NIVEAUS[reg_niveau])
         reg_gn = st.text_input("Bedenk een inlognaam:")
         reg_ww = st.text_input("Bedenk een wachtwoord (Min 8 tekens, 1 cijfer, 1 speciaal teken):", type="password")
         reg_ww2 = st.text_input("Herhaal je wachtwoord:", type="password")
