@@ -4,4 +4,7 @@ python-docx
 pandas
 openpyxl
 requests
+bcrypt
 supabase
+gspread
+google-auth
