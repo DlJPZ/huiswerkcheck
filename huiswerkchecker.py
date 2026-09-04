@@ -469,7 +469,7 @@ elif not st.session_state.get("ingelogd"):
             reg_d_naam = st.text_input("Naam (bijv. Dhr. de Vries):")
             reg_d_login = st.text_input("Kies gebruikersnaam:")
             reg_d_ww = st.text_input("Kies wachtwoord:", type="password", key="reg_d_ww")
-            reg_d_klassen = st.multiselect("Aan welke klassen geef jij les?", ALLE_CLUSTERS)
+            reg_d_klassen = st.multiselect("Aan welke klassen geef jij les?", ALLE_CLUSTERS, key="reg_docent_klassen")
             
             submitted_d_reg = st.form_submit_button("Maak docentaccount aan")
             if submitted_d_reg:
@@ -506,7 +506,7 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
     if not mijn_klassen:
         st.warning("Je hebt nog geen klassen geselecteerd in je profiel.")
     else:
-        docent_klas = st.selectbox("👉 Kies de klas die je wilt bekijken:", mijn_klassen)
+        docent_klas = st.selectbox("👉 Kies de klas die je wilt bekijken:", mijn_klassen, key="docent_dashboard_klas")
         st.divider()
         
         tab_res, tab_check, tab_up = st.tabs(["📊 Resultaten & Feedback", "📋 Controle Inleveringen", "📄 Lesmateriaal Uploaden"])
@@ -516,7 +516,7 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
         
         with tab_res:
             if leerlingen_in_klas:
-                gekozen_leerling_gn = st.selectbox("Kies leerling:", list(leerlingen_in_klas.keys()), format_func=lambda x: leerlingen_in_klas[x])
+                gekozen_leerling_gn = st.selectbox("Kies leerling:", list(leerlingen_in_klas.keys()), format_func=lambda x: leerlingen_in_klas[x], key="res_leerling_select")
                 
                 df_docent = haal_alle_resultaten_op()
                 if not df_docent.empty and "Gebruikersnaam" in df_docent.columns:
@@ -559,11 +559,11 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
             if not lj:
                 st.error("Geen leerjaar gevonden voor deze klas.")
             else:
-                check_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[lj])
+                check_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[lj], key="check_hst_select")
                 beschikbare_bestanden = haal_bestanden_op(lj, check_hst)
                 
                 if beschikbare_bestanden:
-                    check_les = st.selectbox("Kies de les:", beschikbare_bestanden)
+                    check_les = st.selectbox("Kies de les:", beschikbare_bestanden, key="check_les_select")
                     
                     if st.button("Check status", type="primary"):
                         gemaakt_gn = set()
@@ -591,8 +591,8 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
 
         with tab_up:
             col1, col2 = st.columns(2)
-            with col1: up_leerjaar = st.selectbox("Kies leerjaar:", list(HOOFDSTUKKEN.keys()))
-            with col2: up_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar])
+            with col1: up_leerjaar = st.selectbox("Kies leerjaar:", list(HOOFDSTUKKEN.keys()), key="up_lj_select")
+            with col2: up_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar], key="up_hst_select")
             
             uploaded_files = st.file_uploader(f"Upload les(sen) (.docx)", type=["docx"], accept_multiple_files=True)
             
@@ -757,8 +757,8 @@ elif not st.session_state.get("ingelogd"):
         with st.form("leerling_reg_form"):
             reg_voornaam = st.text_input("Wat is je voornaam?")
             col1, col2 = st.columns(2)
-            with col1: reg_niveau = st.selectbox("Jouw niveau:", list(NIVEAUS.keys()))
-            with col2: reg_cluster = st.selectbox("Jouw klas:", NIVEAUS[reg_niveau])
+            with col1: reg_niveau = st.selectbox("Jouw niveau:", list(NIVEAUS.keys()), key="reg_niveau_ll")
+            with col2: reg_cluster = st.selectbox("Jouw klas:", NIVEAUS[reg_niveau], key="reg_cluster_ll")
             reg_gn = st.text_input("Bedenk een inlognaam:")
             reg_ww = st.text_input("Bedenk een wachtwoord (Min 8 tekens, 1 cijfer, 1 speciaal teken):", type="password")
             reg_ww2 = st.text_input("Herhaal je wachtwoord:", type="password")
@@ -822,13 +822,13 @@ elif st.session_state.get("rol") == "leerling":
         if not lj:
             st.error("Oeps, we konden je klas niet koppelen aan een leerjaar.")
         else:
-            kies_hst = st.selectbox("1. Kies het hoofdstuk:", HOOFDSTUKKEN[lj])
+            kies_hst = st.selectbox("1. Kies het hoofdstuk:", HOOFDSTUKKEN[lj], key="ll_kies_hst")
             beschikbare_bestanden = haal_bestanden_op(lj, kies_hst)
 
             if not beschikbare_bestanden:
                 st.warning("Er is nog geen lesmateriaal beschikbaar voor dit hoofdstuk.")
             else:
-                gekozen_les = st.selectbox("2. Kies de les die je wilt oefenen:", beschikbare_bestanden)
+                gekozen_les = st.selectbox("2. Kies de les die je wilt oefenen:", beschikbare_bestanden, key="ll_kies_les")
                 st.divider()
 
                 if gekozen_les:
