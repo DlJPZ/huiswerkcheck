@@ -18,7 +18,7 @@ import io
 from google.oauth2.service_account import Credentials
 
 # 0. Paginainstellingen
-st.set_page_config(page_title="Huiswerkcontrole AK")
+st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # 1. API & Cloud instellen
 if "client" not in st.session_state:
@@ -82,7 +82,7 @@ achtergrond_css = f"""
     background-position: center;
     background-attachment: fixed;
 }}
-.block-container {{ max-width: 900px !important; }}
+.block-container {{ max-width: 1100px !important; }}
 html, body, p, li, label, .stMarkdown, .stChatInput textarea {{ font-size: 18px !important; }}
 </style>
 """
@@ -184,8 +184,8 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
         }
         try:
             supabase.table("resultaten").insert(data).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            st.error(f"Cloud opslag fout (Resultaat): {e}")
 
     # 2. Google Sheets
     if gebruik_gsheets and google_doc:
@@ -209,6 +209,17 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
         if not bestaat_al:
             writer.writerow(["PogingID", "Tijdstip", "Niveau", "Cluster", "Gebruikersnaam", "Voornaam", "Les", "Cijfer", "Beoordeling", "DocentReactie", "ReactieGelezen"])
         writer.writerow([poging_id, tijdstip, niveau, cluster, gebruikersnaam, voornaam, gekozen_les, cijfer, beoordeling, "", "True"])
+
+def haal_alle_resultaten_op():
+    if gebruik_supabase:
+        try:
+            resp = supabase.table("resultaten").select("*").execute()
+            return pd.DataFrame(resp.data)
+        except Exception:
+            pass
+    if os.path.exists("backup_resultaten.csv"):
+        return pd.read_csv("backup_resultaten.csv", delimiter=";")
+    return pd.DataFrame()
 
 
 # --- ACCOUNT & SECURITY FUNCTIES ---
@@ -250,14 +261,6 @@ def registreer_fout_inlog():
 
 def laad_gebruikers():
     users = {}
-    if gebruik_supabase:
-        try:
-            response = supabase.table('gebruikers').select("*").execute()
-            for row in response.data:
-                users[row["Gebruikersnaam"]] = row
-            return users
-        except Exception:
-            pass 
     gebruikers_bestand = "gebruikers.csv"
     if os.path.exists(gebruikers_bestand):
         with open(gebruikers_bestand, "r", encoding="utf-8") as f:
@@ -265,32 +268,36 @@ def laad_gebruikers():
             for row in reader:
                 if "Gebruikersnaam" in row:
                     users[row["Gebruikersnaam"]] = row
+                    
+    if gebruik_supabase:
+        try:
+            response = supabase.table('gebruikers').select("*").execute()
+            for row in response.data:
+                users[row["Gebruikersnaam"]] = row
+        except Exception as e:
+            st.warning(f"Cloud gebruikers ophalen mislukt: {e}")
+            
     return users
 
 def bewaar_alle_gebruikers(users_dict):
-    if gebruik_supabase:
-        try:
-            for user in users_dict.values():
-                supabase.table('gebruikers').upsert(user).execute()
-        except Exception:
-            pass
     with open("gebruikers.csv", "w", newline="", encoding="utf-8") as f:
         fieldnames = ["Gebruikersnaam", "WachtwoordHash", "Voornaam", "Niveau", "Cluster"]
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
         writer.writerows(users_dict.values())
+        
+    if gebruik_supabase:
+        fouten = []
+        for user in users_dict.values():
+            try:
+                supabase.table('gebruikers').upsert(user).execute()
+            except Exception as e:
+                fouten.append(str(e))
+        if fouten:
+            st.error(f"Cloud opslag fout (Leerlingen): {fouten[0]}")
 
 def laad_docenten():
     docs = {}
-    if gebruik_supabase:
-        try:
-            response = supabase.table('docenten').select("*").execute()
-            for row in response.data:
-                row["Klassen"] = row["Klassen"].split(",") if row["Klassen"] else []
-                docs[row["DocentID"]] = row
-            return docs
-        except Exception:
-            pass
     docenten_bestand = "docenten.csv"
     if os.path.exists(docenten_bestand):
         with open(docenten_bestand, "r", encoding="utf-8") as f:
@@ -301,18 +308,21 @@ def laad_docenten():
                     if "Goedgekeurd" not in row:
                         row["Goedgekeurd"] = "Ja" 
                     docs[row["DocentID"]] = row
+
+    if gebruik_supabase:
+        try:
+            response = supabase.table('docenten').select("*").execute()
+            for row in response.data:
+                row["Klassen"] = row["Klassen"].split(",") if row["Klassen"] else []
+                if "Goedgekeurd" not in row:
+                    row["Goedgekeurd"] = "Ja"
+                docs[row["DocentID"]] = row
+        except Exception as e:
+            st.warning(f"Cloud docenten ophalen mislukt: {e}")
+            
     return docs
 
 def bewaar_alle_docenten(docs_dict):
-    if gebruik_supabase:
-        try:
-            for doc_data in docs_dict.values():
-                save_data = doc_data.copy()
-                if isinstance(save_data["Klassen"], list):
-                    save_data["Klassen"] = ",".join(save_data["Klassen"])
-                supabase.table('docenten').upsert(save_data).execute()
-        except Exception:
-            pass
     with open("docenten.csv", "w", newline="", encoding="utf-8") as f:
         fieldnames = ["DocentID", "WachtwoordHash", "Naam", "Klassen", "Goedgekeurd"]
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
@@ -322,9 +332,22 @@ def bewaar_alle_docenten(docs_dict):
             if isinstance(save_data["Klassen"], list):
                 save_data["Klassen"] = ",".join(save_data["Klassen"])
             writer.writerow(save_data)
+            
+    if gebruik_supabase:
+        fouten = []
+        for doc_data in docs_dict.values():
+            save_data = doc_data.copy()
+            if isinstance(save_data["Klassen"], list):
+                save_data["Klassen"] = ",".join(save_data["Klassen"])
+            try:
+                supabase.table('docenten').upsert(save_data).execute()
+            except Exception as e:
+                fouten.append(str(e))
+        if fouten:
+            st.error(f"Cloud opslag fout (Docenten): {fouten[0]}")
 
 
-# --- ZIJBALK: STUDENTEN VOORTGANG & INLEVEREN ---
+# --- ZIJBALK: VOORTGANG & INLOGGEN DOCENTEN ---
 if st.session_state.get("ingelogd") and st.session_state.get("rol") == "leerling":
     st.sidebar.markdown(f"## 👋 Welkom {st.session_state.voornaam}!")
     
@@ -400,25 +423,30 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "leerling
         st.session_state.clear()
         st.rerun()
 
-
-# --- ZIJBALK: DOCENTENPANEEL ---
-if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docent":
+elif not st.session_state.get("ingelogd"):
     st.sidebar.divider()
     st.sidebar.header("👨‍🏫 Docentenpaneel")
     
-    if not st.session_state.get("ingelogd"):
-        tab_d_inlog, tab_d_reg, tab_admin = st.sidebar.tabs(["Inloggen", "Registreren", "⚙️ Admin"])
-        
-        with tab_d_inlog:
-            if check_lockout():
-                st.info("Wacht tot de beveiligingsblokkade is opgeheven.")
-            else:
-                with st.form("docent_login_form"):
-                    d_login = st.text_input("Docent Gebruikersnaam:", key="d_login")
-                    d_ww = st.text_input("Wachtwoord:", type="password", key="d_ww")
-                    submitted_docent = st.form_submit_button("Log in als docent")
-                    
-                    if submitted_docent:
+    tab_d_inlog, tab_d_reg = st.sidebar.tabs(["Inloggen", "Registreren"])
+    
+    with tab_d_inlog:
+        if check_lockout():
+            st.info("Wacht tot de beveiligingsblokkade is opgeheven.")
+        else:
+            with st.form("docent_login_form"):
+                d_login = st.text_input("Docent Gebruikersnaam:", key="d_login")
+                d_ww = st.text_input("Wachtwoord:", type="password", key="d_ww")
+                submitted_docent = st.form_submit_button("Log in als docent")
+                
+                if submitted_docent:
+                    # Check voor Admin
+                    if d_login == "admin" and d_ww == st.secrets.get("ADMIN_WACHTWOORD", ""):
+                        st.session_state.login_pogingen = 0 
+                        st.session_state.ingelogd = True
+                        st.session_state.rol = "admin"
+                        st.session_state.docent_naam = "Beheerder"
+                        st.rerun()
+                    else:
                         docs = laad_docenten()
                         if d_login in docs and controleer_wachtwoord(d_ww, docs[d_login]["WachtwoordHash"]):
                             if docs[d_login].get("Goedgekeurd") == "Ja":
@@ -434,260 +462,264 @@ if not st.session_state.get("ingelogd") or st.session_state.get("rol") == "docen
                         else:
                             registreer_fout_inlog()
                             st.error(f"Onjuiste inloggegevens. Poging {st.session_state.login_pogingen}/5")
-                    
-        with tab_d_reg:
-            with st.form("docent_reg_form"):
-                st.write("Nieuwe docent aanmelden")
-                reg_d_naam = st.text_input("Naam (bijv. Dhr. de Vries):")
-                reg_d_login = st.text_input("Kies gebruikersnaam:")
-                reg_d_ww = st.text_input("Kies wachtwoord:", type="password", key="reg_d_ww")
-                reg_d_klassen = st.multiselect("Aan welke klassen geef jij les?", ALLE_CLUSTERS)
                 
-                submitted_d_reg = st.form_submit_button("Maak docentaccount aan")
-                if submitted_d_reg:
-                    if not reg_d_naam or not reg_d_login or not reg_d_ww or not reg_d_klassen:
-                        st.error("Vul alles in en kies minimaal 1 klas.")
-                    else:
-                        docs = laad_docenten()
-                        if reg_d_login in docs:
-                            st.error("Gebruikersnaam al bezet.")
-                        else:
-                            docs[reg_d_login] = {
-                                "DocentID": reg_d_login,
-                                "WachtwoordHash": hash_wachtwoord(reg_d_ww),
-                                "Naam": reg_d_naam,
-                                "Klassen": reg_d_klassen,
-                                "Goedgekeurd": "Nee"
-                            }
-                            bewaar_alle_docenten(docs)
-                            st.success("Account gemaakt! Je account moet nog worden goedgekeurd door de beheerder.")
-        
-        with tab_admin:
-            st.write("**Beheerderstoegang**")
-            admin_ww = st.text_input("Master Wachtwoord:", type="password", key="admin_master_ww")
+    with tab_d_reg:
+        with st.form("docent_reg_form"):
+            st.write("Nieuwe docent aanmelden")
+            reg_d_naam = st.text_input("Naam (bijv. Dhr. de Vries):")
+            reg_d_login = st.text_input("Kies gebruikersnaam:")
+            reg_d_ww = st.text_input("Kies wachtwoord:", type="password", key="reg_d_ww")
+            reg_d_klassen = st.multiselect("Aan welke klassen geef jij les?", ALLE_CLUSTERS)
             
-            if admin_ww == st.secrets.get("ADMIN_WACHTWOORD", ""):
-                admin_tab_1, admin_tab_2, admin_tab_3 = st.tabs(["Nieuwe Aanvragen", "Beheer Leerlingen", "Beheer Docenten"])
-                
-                with admin_tab_1:
-                    st.write("**Aanvragen Docentenaccounts**")
+            submitted_d_reg = st.form_submit_button("Maak docentaccount aan")
+            if submitted_d_reg:
+                if not reg_d_naam or not reg_d_login or not reg_d_ww or not reg_d_klassen:
+                    st.error("Vul alles in en kies minimaal 1 klas.")
+                else:
                     docs = laad_docenten()
-                    te_keuren = {k: v for k, v in docs.items() if v.get("Goedgekeurd") == "Nee"}
-                    
-                    if not te_keuren:
-                        st.info("Er zijn geen openstaande aanvragen.")
+                    if reg_d_login in docs:
+                        st.error("Gebruikersnaam al bezet.")
                     else:
-                        for d_id, d_info in te_keuren.items():
-                            st.write(f"👨‍🏫 **{d_info['Naam']}** ({d_id})")
-                            st.caption(f"Klassen: {', '.join(d_info['Klassen'])}")
-                            col1, col2 = st.columns(2)
-                            if col1.button("✅ Goedkeuren", key=f"ok_{d_id}"):
-                                docs[d_id]["Goedgekeurd"] = "Ja"
-                                bewaar_alle_docenten(docs)
-                                st.success(f"{d_info['Naam']} goedgekeurd!")
-                                st.rerun()
-                            if col2.button("❌ Weigeren", key=f"del_{d_id}"):
-                                del docs[d_id]
-                                bewaar_alle_docenten(docs)
-                                st.warning("Account verwijderd.")
-                                st.rerun()
+                        docs[reg_d_login] = {
+                            "DocentID": reg_d_login,
+                            "WachtwoordHash": hash_wachtwoord(reg_d_ww),
+                            "Naam": reg_d_naam,
+                            "Klassen": reg_d_klassen,
+                            "Goedgekeurd": "Nee"
+                        }
+                        bewaar_alle_docenten(docs)
+                        st.success("Account gemaakt! Je account moet nog worden goedgekeurd door de beheerder.")
 
-                with admin_tab_2:
-                    st.write("**Overzicht Leerlingen**")
-                    alle_gebruikers = laad_gebruikers()
-                    
-                    if alle_gebruikers:
-                        clusters = sorted(list(set(data["Cluster"] for data in alle_gebruikers.values())))
-                        kies_admin_klas = st.selectbox("Kies een klas:", clusters, key="admin_klas_select")
+elif st.session_state.get("rol") in ["docent", "admin"]:
+    st.sidebar.success(f"Ingelogd als: {st.session_state.docent_naam}")
+    if st.sidebar.button("🚪 Uitloggen", key="d_uitlog"):
+        st.session_state.clear()
+        st.rerun()
+
+
+# --- HOOFDSCHERM: DOCENTENPANEEL (VOLLEDIGE BREEDTE) ---
+if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
+    st.title(f"👨‍🏫 Docentenomgeving - Welkom {st.session_state.docent_naam}")
+    
+    mijn_klassen = st.session_state.docent_klassen
+    
+    if not mijn_klassen:
+        st.warning("Je hebt nog geen klassen geselecteerd in je profiel.")
+    else:
+        docent_klas = st.selectbox("👉 Kies de klas die je wilt bekijken:", mijn_klassen)
+        st.divider()
+        
+        tab_res, tab_check, tab_up = st.tabs(["📊 Resultaten & Feedback", "📋 Controle Inleveringen", "📄 Lesmateriaal Uploaden"])
+        
+        alle_gebruikers = laad_gebruikers()
+        leerlingen_in_klas = {gn: data["Voornaam"] for gn, data in alle_gebruikers.items() if data["Cluster"] == docent_klas}
+        
+        with tab_res:
+            if leerlingen_in_klas:
+                gekozen_leerling_gn = st.selectbox("Kies leerling:", list(leerlingen_in_klas.keys()), format_func=lambda x: leerlingen_in_klas[x])
+                
+                df_docent = haal_alle_resultaten_op()
+                if not df_docent.empty and "Gebruikersnaam" in df_docent.columns:
+                    mijn_data = df_docent[df_docent["Gebruikersnaam"] == gekozen_leerling_gn].copy()
+                    if not mijn_data.empty:
+                        st.write(f"**Resultaten {leerlingen_in_klas[gekozen_leerling_gn]}:**")
                         
-                        leerlingen_in_admin_klas = {gn: data for gn, data in alle_gebruikers.items() if data["Cluster"] == kies_admin_klas}
-                        
-                        if leerlingen_in_admin_klas:
-                            kies_admin_ll = st.selectbox("Kies een leerling:", list(leerlingen_in_admin_klas.keys()), format_func=lambda x: f"{leerlingen_in_admin_klas[x]['Voornaam']} ({x})", key="admin_ll_select")
-                            ll_data = leerlingen_in_admin_klas[kies_admin_ll]
-                            
-                            st.write(f"Gegevens van **{ll_data['Voornaam']}** ({kies_admin_ll}):")
-                            nieuwe_voornaam = st.text_input("Voornaam:", value=ll_data["Voornaam"], key="admin_ll_naam")
-                            nieuw_ll_ww = st.text_input("Nieuw wachtwoord (laat leeg om niet te wijzigen):", type="password", key="admin_ll_ww")
-                            
-                            if st.button("Sla gegevens leerling op", key="admin_ll_opslaan"):
-                                changed = False
-                                if nieuwe_voornaam != ll_data["Voornaam"]:
-                                    alle_gebruikers[kies_admin_ll]["Voornaam"] = nieuwe_voornaam
-                                    changed = True
-                                if nieuw_ll_ww:
-                                    is_sterk, fout = is_sterk_wachtwoord(nieuw_ll_ww)
-                                    if not is_sterk:
-                                        st.error(fout)
-                                    else:
-                                        alle_gebruikers[kies_admin_ll]["WachtwoordHash"] = hash_wachtwoord(nieuw_ll_ww)
-                                        changed = True
+                        for index, row in mijn_data.iterrows():
+                            with st.expander(f"{row['Les']} - Cijfer: {row['Cijfer']}"):
+                                st.write(f"**AI Beoordeling:** {row['Beoordeling']}")
+                                huidige_reactie = row.get("DocentReactie", "")
+                                if pd.isna(huidige_reactie): huidige_reactie = ""
                                 
-                                if changed:
-                                    bewaar_alle_gebruikers(alle_gebruikers)
-                                    st.success(f"Gegevens van {nieuwe_voornaam} succesvol gewijzigd!")
-                                else:
-                                    st.info("Geen wijzigingen gedetecteerd.")
-                        else:
-                            st.info("Geen leerlingen in deze klas.")
-                    else:
-                        st.info("Er zijn nog geen leerlingen geregistreerd.")
-
-                with admin_tab_3:
-                    st.write("**Overzicht Docenten**")
-                    docs = laad_docenten()
-                    goedgekeurde_docenten = {k: v for k, v in docs.items() if v.get("Goedgekeurd") == "Ja"}
-                    
-                    if goedgekeurde_docenten:
-                        kies_admin_doc = st.selectbox("Kies een docent:", list(goedgekeurde_docenten.keys()), format_func=lambda x: f"{goedgekeurde_docenten[x]['Naam']} ({x})", key="admin_doc_select")
-                        doc_data = goedgekeurde_docenten[kies_admin_doc]
-                        
-                        st.write(f"Gegevens van **{doc_data['Naam']}** ({kies_admin_doc}):")
-                        st.caption(f"Klassen: {', '.join(doc_data['Klassen'])}")
-                        
-                        nieuw_doc_ww = st.text_input("Nieuw wachtwoord (laat leeg om niet te wijzigen):", type="password", key="admin_doc_ww")
-                        
-                        if st.button("Sla wachtwoord docent op", key="admin_doc_opslaan"):
-                            if nieuw_doc_ww:
-                                docs[kies_admin_doc]["WachtwoordHash"] = hash_wachtwoord(nieuw_doc_ww)
-                                bewaar_alle_docenten(docs)
-                                st.success(f"Wachtwoord van {doc_data['Naam']} succesvol gewijzigd!")
-                            else:
-                                st.warning("Vul een nieuw wachtwoord in als je dit wilt wijzigen.")
-                    else:
-                        st.info("Er zijn geen goedgekeurde docenten.")
-
-    elif st.session_state.get("rol") == "docent":
-        st.sidebar.success(f"Ingelogd als: {st.session_state.docent_naam}")
-        if st.sidebar.button("🚪 Uitloggen", key="d_uitlog"):
-            st.session_state.clear()
-            st.rerun()
-            
-        mijn_klassen = st.session_state.docent_klassen
-        
-        if not mijn_klassen:
-            st.sidebar.warning("Je hebt geen klassen geselecteerd.")
-        else:
-            docent_klas = st.sidebar.selectbox("Kies een van jouw klassen:", mijn_klassen)
-            docent_actie = st.sidebar.radio("Wat wil je doen?", ["📊 Resultaten & Feedback", "📋 Wie heeft het gemaakt?", "📄 Lesmateriaal Uploaden"])
-            
-            alle_gebruikers = laad_gebruikers()
-            leerlingen_in_klas = {gn: data["Voornaam"] for gn, data in alle_gebruikers.items() if data["Cluster"] == docent_klas}
-            
-            def haal_alle_resultaten_op():
-                if gebruik_supabase:
-                    try:
-                        resp = supabase.table("resultaten").select("*").execute()
-                        return pd.DataFrame(resp.data)
-                    except Exception:
-                        pass
-                if os.path.exists("backup_resultaten.csv"):
-                    return pd.read_csv("backup_resultaten.csv", delimiter=";")
-                return pd.DataFrame()
-
-            if docent_actie == "📊 Resultaten & Feedback":
-                if leerlingen_in_klas:
-                    gekozen_leerling_gn = st.sidebar.selectbox("Kies leerling:", list(leerlingen_in_klas.keys()), format_func=lambda x: leerlingen_in_klas[x])
-                    
-                    df_docent = haal_alle_resultaten_op()
-                    if not df_docent.empty and "Gebruikersnaam" in df_docent.columns:
-                        mijn_data = df_docent[df_docent["Gebruikersnaam"] == gekozen_leerling_gn].copy()
-                        if not mijn_data.empty:
-                            st.sidebar.write(f"**Resultaten {leerlingen_in_klas[gekozen_leerling_gn]}:**")
-                            
-                            for index, row in mijn_data.iterrows():
-                                with st.sidebar.expander(f"{row['Les']} - Cijfer: {row['Cijfer']}"):
-                                    st.write(f"**AI Beoordeling:** {row['Beoordeling']}")
-                                    huidige_reactie = row.get("DocentReactie", "")
-                                    if pd.isna(huidige_reactie): huidige_reactie = ""
+                                nieuwe_reactie = st.text_area("Plaats een reactie voor de leerling:", value=huidige_reactie, key=f"reactie_{row['PogingID']}")
+                                
+                                if st.button("Opslaan", key=f"btn_{row['PogingID']}"):
+                                    if gebruik_supabase:
+                                        try:
+                                            supabase.table("resultaten").update({"DocentReactie": nieuwe_reactie, "ReactieGelezen": "False"}).eq("PogingID", row["PogingID"]).execute()
+                                        except Exception as e:
+                                            st.error(f"Fout in cloud update: {e}")
                                     
-                                    nieuwe_reactie = st.text_area("Plaats een reactie voor de leerling:", value=huidige_reactie, key=f"reactie_{row['PogingID']}")
+                                    if os.path.exists("backup_resultaten.csv"):
+                                        df_all = pd.read_csv("backup_resultaten.csv", delimiter=";")
+                                        df_all.loc[df_all['PogingID'] == row['PogingID'], 'DocentReactie'] = nieuwe_reactie
+                                        df_all.loc[df_all['PogingID'] == row['PogingID'], 'ReactieGelezen'] = False
+                                        df_all.to_csv("backup_resultaten.csv", sep=";", index=False)
                                     
-                                    if st.button("Opslaan", key=f"btn_{row['PogingID']}"):
-                                        if gebruik_supabase:
-                                            try:
-                                                supabase.table("resultaten").update({"DocentReactie": nieuwe_reactie, "ReactieGelezen": "False"}).eq("PogingID", row["PogingID"]).execute()
-                                            except Exception:
-                                                pass
-                                        
-                                        if os.path.exists("backup_resultaten.csv"):
-                                            df_all = pd.read_csv("backup_resultaten.csv", delimiter=";")
-                                            df_all.loc[df_all['PogingID'] == row['PogingID'], 'DocentReactie'] = nieuwe_reactie
-                                            df_all.loc[df_all['PogingID'] == row['PogingID'], 'ReactieGelezen'] = False
-                                            df_all.to_csv("backup_resultaten.csv", sep=";", index=False)
-                                        
-                                        st.success("Reactie opgeslagen!")
-                        else:
-                            st.sidebar.info("Deze leerling heeft nog niets ingeleverd.")
+                                    st.success("Reactie opgeslagen!")
                     else:
-                        st.sidebar.info("Nog geen systeemdata beschikbaar.")
+                        st.info("Deze leerling heeft nog niets ingeleverd.")
                 else:
-                    st.sidebar.info(f"Geen leerlingen in {docent_klas}.")
+                    st.info("Nog geen systeemdata beschikbaar.")
+            else:
+                st.info(f"Geen leerlingen in {docent_klas}.")
+                
+        with tab_check:
+            st.write("**Controleer inleveringen per les**")
+            lj = get_leerjaar(docent_klas)
+            if not lj:
+                st.error("Geen leerjaar gevonden voor deze klas.")
+            else:
+                check_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[lj])
+                beschikbare_bestanden = haal_bestanden_op(lj, check_hst)
+                
+                if beschikbare_bestanden:
+                    check_les = st.selectbox("Kies de les:", beschikbare_bestanden)
                     
-            elif docent_actie == "📋 Wie heeft het gemaakt?":
-                st.sidebar.write("**Controleer inleveringen**")
-                lj = get_leerjaar(docent_klas)
-                if not lj:
-                    st.sidebar.error("Geen leerjaar gevonden voor deze klas.")
-                else:
-                    check_hst = st.sidebar.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[lj])
-                    beschikbare_bestanden = haal_bestanden_op(lj, check_hst)
-                    
-                    if beschikbare_bestanden:
-                        check_les = st.sidebar.selectbox("Kies de les:", beschikbare_bestanden)
+                    if st.button("Check status", type="primary"):
+                        gemaakt_gn = set()
+                        df_check = haal_alle_resultaten_op()
                         
-                        if st.sidebar.button("Check status"):
-                            gemaakt_gn = set()
-                            df_check = haal_alle_resultaten_op()
-                            
-                            if not df_check.empty and "Gebruikersnaam" in df_check.columns and "Les" in df_check.columns:
-                                gelukt = df_check[(df_check["Cluster"] == docent_klas) & (df_check["Les"] == check_les)]
-                                gemaakt_gn = set(gelukt["Gebruikersnaam"].dropna().tolist())
-                            
-                            alle_gn_in_klas = set(leerlingen_in_klas.keys())
-                            niet_gemaakt_gn = alle_gn_in_klas - gemaakt_gn
-                            
-                            st.sidebar.success(f"✅ **Gemaakt ({len(gemaakt_gn)}):**")
+                        if not df_check.empty and "Gebruikersnaam" in df_check.columns and "Les" in df_check.columns:
+                            gelukt = df_check[(df_check["Cluster"] == docent_klas) & (df_check["Les"] == check_les)]
+                            gemaakt_gn = set(gelukt["Gebruikersnaam"].dropna().tolist())
+                        
+                        alle_gn_in_klas = set(leerlingen_in_klas.keys())
+                        niet_gemaakt_gn = alle_gn_in_klas - gemaakt_gn
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.success(f"✅ **Gemaakt ({len(gemaakt_gn)}):**")
                             for gn in gemaakt_gn:
-                                if gn in leerlingen_in_klas: st.sidebar.write(f"- {leerlingen_in_klas[gn]}")
+                                if gn in leerlingen_in_klas: st.write(f"- {leerlingen_in_klas[gn]}")
                                 
-                            st.sidebar.error(f"❌ **Nog NIET gemaakt ({len(niet_gemaakt_gn)}):**")
+                        with col2:
+                            st.error(f"❌ **Nog NIET gemaakt ({len(niet_gemaakt_gn)}):**")
                             for gn in niet_gemaakt_gn:
-                                st.sidebar.write(f"- {leerlingen_in_klas[gn]}")
-                    else:
-                        st.sidebar.info("Geen lesmateriaal in deze map.")
+                                st.write(f"- {leerlingen_in_klas[gn]}")
+                else:
+                    st.info("Geen lesmateriaal in deze map.")
 
-            elif docent_actie == "📄 Lesmateriaal Uploaden":
-                up_leerjaar = st.sidebar.selectbox("Kies leerjaar:", list(HOOFDSTUKKEN.keys()))
-                up_hst = st.sidebar.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar])
-                
-                uploaded_files = st.sidebar.file_uploader(f"Upload les(sen) (.docx)", type=["docx"], accept_multiple_files=True)
-                
-                if uploaded_files:
-                    if st.sidebar.button("Opslaan & Uploaden"):
-                        for uploaded_file in uploaded_files:
-                            if gebruik_supabase:
-                                pad = f"{up_leerjaar}/{up_hst}/{uploaded_file.name}"
-                                try:
-                                    supabase.storage.from_("lesmateriaal").upload(
-                                        file=uploaded_file.getvalue(),
-                                        path=pad,
-                                        file_options={"upsert": "true", "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-                                    )
-                                except Exception as e:
-                                    st.sidebar.error(f"Cloud upload mislukt voor {uploaded_file.name}: {e}")
-                                    
-                            upload_map = os.path.join("lesmateriaal", up_leerjaar, up_hst)
-                            if not os.path.exists(upload_map):
-                                os.makedirs(upload_map)
-                            with open(os.path.join(upload_map, uploaded_file.name), "wb") as f:
-                                f.write(uploaded_file.getbuffer())
+        with tab_up:
+            col1, col2 = st.columns(2)
+            with col1: up_leerjaar = st.selectbox("Kies leerjaar:", list(HOOFDSTUKKEN.keys()))
+            with col2: up_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar])
+            
+            uploaded_files = st.file_uploader(f"Upload les(sen) (.docx)", type=["docx"], accept_multiple_files=True)
+            
+            if uploaded_files:
+                if st.button("Opslaan & Uploaden", type="primary"):
+                    for uploaded_file in uploaded_files:
+                        if gebruik_supabase:
+                            pad = f"{up_leerjaar}/{up_hst}/{uploaded_file.name}"
+                            try:
+                                supabase.storage.from_("lesmateriaal").upload(
+                                    file=uploaded_file.getvalue(),
+                                    path=pad,
+                                    file_options={"upsert": "true", "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+                                )
+                            except Exception as e:
+                                st.error(f"Cloud upload mislukt voor {uploaded_file.name}: {e}")
                                 
-                        st.sidebar.success(f"✅ {len(uploaded_files)} bestand(en) succesvol geüpload naar {up_leerjaar}/{up_hst}!")
+                        upload_map = os.path.join("lesmateriaal", up_leerjaar, up_hst)
+                        if not os.path.exists(upload_map):
+                            os.makedirs(upload_map)
+                        with open(os.path.join(upload_map, uploaded_file.name), "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                            
+                    st.success(f"✅ {len(uploaded_files)} bestand(en) succesvol geüpload naar {up_leerjaar}/{up_hst}!")
+
+
+# --- HOOFDSCHERM: BEHEERDERSPANEEL (VOLLEDIGE BREEDTE) ---
+elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin":
+    st.title("⚙️ Beheerderspaneel")
+    
+    admin_tab_1, admin_tab_2, admin_tab_3 = st.tabs(["Nieuwe Aanvragen", "Beheer Leerlingen", "Beheer Docenten"])
+    
+    with admin_tab_1:
+        st.write("**Aanvragen Docentenaccounts**")
+        docs = laad_docenten()
+        te_keuren = {k: v for k, v in docs.items() if v.get("Goedgekeurd") == "Nee"}
+        
+        if not te_keuren:
+            st.info("Er zijn geen openstaande aanvragen.")
+        else:
+            for d_id, d_info in te_keuren.items():
+                st.write(f"👨‍🏫 **{d_info['Naam']}** ({d_id})")
+                st.caption(f"Klassen: {', '.join(d_info['Klassen'])}")
+                col1, col2 = st.columns([1, 8])
+                with col1:
+                    if st.button("✅ Goedkeuren", key=f"ok_{d_id}"):
+                        docs[d_id]["Goedgekeurd"] = "Ja"
+                        bewaar_alle_docenten(docs)
+                        st.success(f"{d_info['Naam']} goedgekeurd!")
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Weigeren", key=f"del_{d_id}"):
+                        del docs[d_id]
+                        bewaar_alle_docenten(docs)
+                        st.warning("Account verwijderd.")
+                        st.rerun()
+
+    with admin_tab_2:
+        st.write("**Overzicht Leerlingen**")
+        alle_gebruikers = laad_gebruikers()
+        
+        if alle_gebruikers:
+            clusters = sorted(list(set(data["Cluster"] for data in alle_gebruikers.values())))
+            kies_admin_klas = st.selectbox("Kies een klas:", clusters, key="admin_klas_select")
+            
+            leerlingen_in_admin_klas = {gn: data for gn, data in alle_gebruikers.items() if data["Cluster"] == kies_admin_klas}
+            
+            if leerlingen_in_admin_klas:
+                kies_admin_ll = st.selectbox("Kies een leerling:", list(leerlingen_in_admin_klas.keys()), format_func=lambda x: f"{leerlingen_in_admin_klas[x]['Voornaam']} ({x})", key="admin_ll_select")
+                ll_data = leerlingen_in_admin_klas[kies_admin_ll]
+                
+                with st.form("admin_leerling_bewerk"):
+                    st.write(f"Gegevens van **{ll_data['Voornaam']}** ({kies_admin_ll}):")
+                    nieuwe_voornaam = st.text_input("Voornaam:", value=ll_data["Voornaam"], key="admin_ll_naam")
+                    nieuw_ll_ww = st.text_input("Nieuw wachtwoord (laat leeg om niet te wijzigen):", type="password", key="admin_ll_ww")
+                    
+                    if st.form_submit_button("Sla gegevens op", type="primary"):
+                        changed = False
+                        if nieuwe_voornaam != ll_data["Voornaam"]:
+                            alle_gebruikers[kies_admin_ll]["Voornaam"] = nieuwe_voornaam
+                            changed = True
+                        if nieuw_ll_ww:
+                            is_sterk, fout = is_sterk_wachtwoord(nieuw_ll_ww)
+                            if not is_sterk:
+                                st.error(fout)
+                            else:
+                                alle_gebruikers[kies_admin_ll]["WachtwoordHash"] = hash_wachtwoord(nieuw_ll_ww)
+                                changed = True
+                        
+                        if changed:
+                            bewaar_alle_gebruikers(alle_gebruikers)
+                            st.success(f"Gegevens succesvol gewijzigd!")
+                        else:
+                            st.info("Geen wijzigingen gedetecteerd.")
+            else:
+                st.info("Geen leerlingen in deze klas.")
+        else:
+            st.info("Er zijn nog geen leerlingen geregistreerd.")
+
+    with admin_tab_3:
+        st.write("**Overzicht Docenten**")
+        docs = laad_docenten()
+        goedgekeurde_docenten = {k: v for k, v in docs.items() if v.get("Goedgekeurd") == "Ja"}
+        
+        if goedgekeurde_docenten:
+            kies_admin_doc = st.selectbox("Kies een docent:", list(goedgekeurde_docenten.keys()), format_func=lambda x: f"{goedgekeurde_docenten[x]['Naam']} ({x})", key="admin_doc_select")
+            doc_data = goedgekeurde_docenten[kies_admin_doc]
+            
+            with st.form("admin_docent_bewerk"):
+                st.write(f"Gegevens van **{doc_data['Naam']}** ({kies_admin_doc}):")
+                st.caption(f"Klassen: {', '.join(doc_data['Klassen'])}")
+                
+                nieuw_doc_ww = st.text_input("Nieuw wachtwoord (laat leeg om niet te wijzigen):", type="password", key="admin_doc_ww")
+                
+                if st.form_submit_button("Sla wachtwoord op", type="primary"):
+                    if nieuw_doc_ww:
+                        docs[kies_admin_doc]["WachtwoordHash"] = hash_wachtwoord(nieuw_doc_ww)
+                        bewaar_alle_docenten(docs)
+                        st.success(f"Wachtwoord succesvol gewijzigd!")
+                    else:
+                        st.warning("Vul een nieuw wachtwoord in als je dit wilt wijzigen.")
+        else:
+            st.info("Er zijn geen goedgekeurde docenten.")
 
 
 # --- HOOFDSCHERM: LEERLING PORTAAL ---
-if not st.session_state.get("ingelogd"):
+elif not st.session_state.get("ingelogd"):
     st.title("🗺️ Huiswerkcontrole AK")
     st.markdown("Welkom! Ben je een leerling? Log hieronder in.")
     
@@ -762,7 +794,6 @@ elif st.session_state.get("rol") == "leerling":
     tab_oefen, tab_geschiedenis, tab_instellingen = st.tabs(["🗺️ Oefenen", "📊 Mijn Resultaten", "⚙️ Instellingen"])
     
     with tab_oefen:
-        
         st.markdown("""
             <style>
             div[data-testid="stChatMessageContent"] {
