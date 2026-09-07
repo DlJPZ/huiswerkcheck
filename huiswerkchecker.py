@@ -294,7 +294,8 @@ def bewaar_alle_gebruikers(users_dict):
             except Exception as e:
                 fouten.append(str(e))
         if fouten:
-            st.error(f"Cloud opslag fout (Leerlingen): {fouten[0]}")
+            st.error(f"🚨 Supabase Fout: {fouten[0]}")
+            st.warning("👉 Oplossing voor docent: Zorg dat de tabel 'gebruikers' in Supabase exact deze kolommen heeft: 'Gebruikersnaam', 'WachtwoordHash', 'Voornaam', 'Niveau', 'Cluster'. En zorg dat 'Gebruikersnaam' als Primary Key is ingesteld!")
 
 def laad_docenten():
     docs = {}
@@ -482,7 +483,7 @@ elif not st.session_state.get("ingelogd"):
                     else:
                         docs[reg_d_login] = {
                             "DocentID": reg_d_login,
-                            "WachtwoordHash": hash_wachtwoord(reg_d_ww),
+                            "WachtwoordHash": hash_wachtwoord(reg_ww),
                             "Naam": reg_d_naam,
                             "Klassen": reg_d_klassen,
                             "Goedgekeurd": "Nee"
@@ -754,26 +755,32 @@ elif not st.session_state.get("ingelogd"):
         st.subheader("Nieuw account aanmaken")
         st.warning("⚠️ **Privacy Waarschuwing:** Gebruik **géén herleidbare persoonsgegevens** (achternaam/geboortedatum) in je inlognaam of wachtwoord.")
         
+        # OPLOSSING 1: Keuze Niveau staat nu BUITEN het formulier voor dynamisch updaten.
+        reg_niveau = st.selectbox("Jouw niveau:", list(NIVEAUS.keys()), key="reg_niveau_ll")
+        
         with st.form("leerling_reg_form"):
             reg_voornaam = st.text_input("Wat is je voornaam?")
-            col1, col2 = st.columns(2)
-            with col1: reg_niveau = st.selectbox("Jouw niveau:", list(NIVEAUS.keys()), key="reg_niveau_ll")
-            with col2: reg_cluster = st.selectbox("Jouw klas:", NIVEAUS[reg_niveau], key="reg_cluster_ll")
+            reg_cluster = st.selectbox("Jouw klas:", NIVEAUS[reg_niveau], key="reg_cluster_ll")
             reg_gn = st.text_input("Bedenk een inlognaam:")
             reg_ww = st.text_input("Bedenk een wachtwoord (Min 8 tekens, 1 cijfer, 1 speciaal teken):", type="password")
             reg_ww2 = st.text_input("Herhaal je wachtwoord:", type="password")
             
             submitted_reg = st.form_submit_button("Account Aanmaken")
             if submitted_reg:
-                if not reg_voornaam or not reg_gn or not reg_ww: st.error("Vul alle velden in.")
-                elif reg_ww != reg_ww2: st.error("Wachtwoorden komen niet overeen!")
+                if not reg_voornaam or not reg_gn or not reg_ww: 
+                    st.error("Vul alle velden in.")
+                elif reg_ww != reg_ww2: 
+                    st.error("Wachtwoorden komen niet overeen!")
                 else:
                     is_sterk, fout = is_sterk_wachtwoord(reg_ww)
-                    if not is_sterk: st.error(fout)
+                    if not is_sterk: 
+                        st.error(fout)
                     else:
                         gebruikers = laad_gebruikers()
-                        if reg_gn in gebruikers: st.error("Inlognaam al bezet.")
+                        if reg_gn in gebruikers: 
+                            st.error("❌ Deze inlognaam is al bezet. Kies een andere.")
                         else:
+                            # OPLOSSING 2: Zichtbare opslag met duidelijke foutmelding via try-except
                             gebruikers[reg_gn] = {
                                 "Gebruikersnaam": reg_gn,
                                 "WachtwoordHash": hash_wachtwoord(reg_ww),
@@ -781,8 +788,11 @@ elif not st.session_state.get("ingelogd"):
                                 "Niveau": reg_niveau,
                                 "Cluster": reg_cluster
                             }
-                            bewaar_alle_gebruikers(gebruikers)
-                            st.success("Account aangemaakt! Je kunt nu inloggen.")
+                            try:
+                                bewaar_alle_gebruikers(gebruikers)
+                                st.success("✅ Account succesvol aangemaakt! Je kunt nu inloggen via het tabblad 'Inloggen'.")
+                            except Exception as e:
+                                st.error(f"🚨 Onverwachte fout bij opslaan: {e}")
 
 elif st.session_state.get("rol") == "leerling":
     st.title("🗺️ Huiswerkcontrole AK")
