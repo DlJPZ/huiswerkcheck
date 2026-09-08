@@ -19,9 +19,8 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # 1. API & Cloud instellen
-if "client" not in st.session_state:
-    st.session_state.client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"].strip())
-client = st.session_state.client
+os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"].strip()
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"].strip())
 
 # Supabase Connectie
 gebruik_supabase = False
@@ -877,6 +876,7 @@ elif st.session_state.get("rol") == "leerling":
                             leer_link = "https://aivoorleerlingen.nl/havo/aardrijkskunde/leren"
 
                         if les_tekst:
+                            # AANGEPASTE PROMPT MET NIEUWE REGELS
                             eerste_input = f"""Je bent docent aardrijkskunde (bovenbouw {st.session_state.niveau}). Toon: professioneel, zakelijk, aanmoedigend. Spreek de leerling aan met {st.session_state.voornaam}.
 Baseer de ONDERWERPEN op de theorie. Geef NOOIT zelf direct het antwoord (behalve als een leerling een vraag definitief fout heeft).
 --- START THEORIE ---
