@@ -26,7 +26,11 @@ if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
 # Filter eventuele per ongeluk geplaatste aanhalingstekens uit de secret
 api_key = st.secrets["GEMINI_API_KEY"].replace('"', '').replace("'", "").strip()
 os.environ["GEMINI_API_KEY"] = api_key
-client = genai.Client(api_key=api_key)
+
+# OPLOSSING: Sla de client op in session_state, anders verbreekt de verbinding ("client has been closed") na elke enter
+if "ai_client" not in st.session_state:
+    st.session_state.ai_client = genai.Client(api_key=api_key)
+client = st.session_state.ai_client
 
 # Supabase Connectie
 gebruik_supabase = False
