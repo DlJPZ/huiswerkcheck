@@ -534,7 +534,6 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
         
         with tab_res:
             ll_ruw = {gn: data for gn, data in alle_gebruikers.items() if data.get("Cluster") == docent_klas and data.get("Goedgekeurd", "Ja") == "Ja"}
-            # Sorteer veilig op nummer
             ll_sorted = sorted(ll_ruw.items(), key=lambda x: int(re.sub(r'\D', '', str(x[1].get("Nummer", "999"))) or 999))
             leerlingen_in_klas = {gn: f"{data.get('Nummer', '-')} | {data['Voornaam']}" for gn, data in ll_sorted}
             
@@ -588,7 +587,6 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
                             gelukt = df_check[(df_check["Cluster"] == docent_klas) & (df_check["Les"] == check_les)]
                             gemaakt_gn = set(gelukt["Gebruikersnaam"].dropna().tolist())
                             
-                        # Gebruik de al gesorteerde ll_sorted lijst voor nette weergave!
                         alle_gn_in_klas = set(gn for gn, d in ll_sorted)
                         niet_gemaakt_gn = alle_gn_in_klas - gemaakt_gn
                         
@@ -634,16 +632,16 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
                     st.success(f"✅ {len(uploaded_files)} bestand(en) succesvol geüpload naar {up_leerjaar}/{up_hst}!")
 
         with tab_keuren:
-            st.write(f"**Nieuwe aanvragen voor {docent_klas}**")
-            te_keuren = {gn: d for gn, d in alle_gebruikers.items() if d.get("Cluster") == docent_klas and d.get("Goedgekeurd", "Ja") == "Nee"}
+            st.write("**Nieuwe aanvragen voor al jouw klassen**")
+            te_keuren = {gn: d for gn, d in alle_gebruikers.items() if d.get("Cluster") in mijn_klassen and d.get("Goedgekeurd", "Ja") == "Nee"}
             
             if not te_keuren:
-                st.info("Er zijn op dit moment geen openstaande aanvragen voor deze klas.")
+                st.info("Er zijn op dit moment geen openstaande aanvragen.")
             else:
                 for gn, d_info in te_keuren.items():
                     col_info, col_nr, col_ok, col_weiger = st.columns([3, 1, 1, 1])
                     with col_info:
-                        st.write(f"🎓 **{d_info['Voornaam']}** (`{gn}`)")
+                        st.write(f"🎓 **{d_info['Voornaam']}** (`{gn}`) - Klas: **{d_info.get('Cluster', '?')}**")
                     with col_nr:
                         toegekend_nr = st.text_input("Klassennummer", key=f"nr_{gn}", placeholder="Bijv. 1")
                     with col_ok:
