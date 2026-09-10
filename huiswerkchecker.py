@@ -743,17 +743,18 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
                 st.divider()
                 st.write("### ✏️ Gegevens Aanpassen")
                 
-                col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns([2, 1, 2, 2, 1])
+                col_h1, col_h2, col_h3, col_h4, col_h5, col_h6 = st.columns([2, 1, 2, 2, 2, 1])
                 col_h1.caption("Naam & Gebruikersnaam")
                 col_h2.caption("Nummer")
                 col_h3.caption("Pas voornaam aan")
-                col_h4.caption("Nieuw wachtwoord")
-                col_h5.caption("Opslaan")
+                col_h4.caption("Pas klas aan")
+                col_h5.caption("Nieuw wachtwoord")
+                col_h6.caption("Opslaan")
                 
                 ll_sorted_admin = sorted(leerlingen_in_admin_klas.items(), key=lambda x: int(re.sub(r'\D', '', str(x[1].get("Nummer", "999"))) or 999))
                 
                 for gn, ll_data in ll_sorted_admin:
-                    col_naam, col_nr, col_edit_vn, col_edit_ww, col_save = st.columns([2, 1, 2, 2, 1])
+                    col_naam, col_nr, col_edit_vn, col_edit_klas, col_edit_ww, col_save = st.columns([2, 1, 2, 2, 2, 1])
                     
                     with col_naam:
                         status = "✅" if ll_data.get("Goedgekeurd", "Ja") == "Ja" else "⏳ Wachtend"
@@ -764,6 +765,11 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
                         
                     with col_edit_vn:
                         nw_vn = st.text_input("Voornaam", value=ll_data["Voornaam"], key=f"vn_{gn}", label_visibility="collapsed")
+                        
+                    with col_edit_klas:
+                        huidige_klas = ll_data.get("Cluster", "")
+                        idx = ALLE_CLUSTERS.index(huidige_klas) if huidige_klas in ALLE_CLUSTERS else 0
+                        nw_klas = st.selectbox("Klas", options=ALLE_CLUSTERS, index=idx, key=f"klas_{gn}", label_visibility="collapsed")
                         
                     with col_edit_ww:
                         nw_ww = st.text_input("Wachtwoord", placeholder="Nieuw ww...", type="password", key=f"ww_{gn}", label_visibility="collapsed")
@@ -776,6 +782,13 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
                                 changed = True
                             if nw_vn != ll_data["Voornaam"]:
                                 alle_gebruikers[gn]["Voornaam"] = nw_vn
+                                changed = True
+                            if nw_klas != ll_data.get("Cluster", ""):
+                                alle_gebruikers[gn]["Cluster"] = nw_klas
+                                for niv, klassenlijst in NIVEAUS.items():
+                                    if nw_klas in klassenlijst:
+                                        alle_gebruikers[gn]["Niveau"] = niv
+                                        break
                                 changed = True
                             if nw_ww:
                                 is_sterk, fout = is_sterk_wachtwoord(nw_ww)
@@ -844,15 +857,33 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
             
             with st.form("admin_docent_bewerk"):
                 st.write(f"Gegevens van **{doc_data['Naam']}** ({kies_admin_doc}):")
-                st.caption(f"Klassen: {', '.join(doc_data['Klassen'])}")
+                
+                # NIEUW: Multiselect voor docent-klassen
+                huidige_klassen = [k for k in doc_data.get('Klassen', []) if k in ALLE_CLUSTERS]
+                nieuwe_klassen = st.multiselect("Toegewezen klassen:", ALLE_CLUSTERS, default=huidige_klassen, key="admin_doc_klassen")
+                
                 nieuw_doc_ww = st.text_input("Nieuw wachtwoord (laat leeg om niet te wijzigen):", type="password", key="admin_doc_ww")
-                if st.form_submit_button("Sla wachtwoord op", type="primary"):
+                
+                if st.form_submit_button("Sla wijzigingen op", type="primary"):
+                    changed = False
+                    
+                    if set(nieuwe_klassen) != set(huidige_klassen):
+                        docs[kies_admin_doc]["Klassen"] = nieuwe_klassen
+                        changed = True
+                        
                     if nieuw_doc_ww:
+                        # Eventueel kun je hier ook is_sterk_wachtwoord(nieuw_doc_ww) gebruiken, maar docenten
+                        # bepalen zelf de veiligheid voor nu. We slaan de hash op:
                         docs[kies_admin_doc]["WachtwoordHash"] = hash_wachtwoord(nieuw_doc_ww)
+                        changed = True
+                        
+                    if changed:
                         bewaar_alle_docenten(docs)
-                        st.success(f"Wachtwoord succesvol gewijzigd!")
+                        st.success(f"Wijzigingen succesvol opgeslagen!")
+                        time.sleep(1)
+                        st.rerun()
                     else:
-                        st.warning("Vul een nieuw wachtwoord in als je dit wilt wijzigen.")
+                        st.info("Geen wijzigingen gedetecteerd.")
         else:
             st.info("Er zijn geen goedgekeurde docenten.")
 
