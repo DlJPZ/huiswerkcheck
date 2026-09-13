@@ -20,7 +20,7 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # Pas deze datum aan wanneer je een update doet!
-LAATSTE_UPDATE = "10 september 2026"
+LAATSTE_UPDATE = "13 september 2026"
 
 # 1. API & Cloud instellen
 if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
@@ -609,7 +609,39 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
             with col1: up_leerjaar = st.selectbox("Kies leerjaar:", list(HOOFDSTUKKEN.keys()), key="up_lj_select")
             with col2: up_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar], key="up_hst_select")
             
-            uploaded_files = st.file_uploader(f"Upload les(sen) (.docx)", type=["docx"], accept_multiple_files=True)
+            st.divider()
+            st.write(f"**Huidige lesmaterialen in {up_leerjaar} / {up_hst}:**")
+            huidige_bestanden = haal_bestanden_op(up_leerjaar, up_hst)
+            
+            if huidige_bestanden:
+                for b in huidige_bestanden:
+                    col_file, col_del = st.columns([8, 1])
+                    with col_file:
+                        st.write(f"📄 {b}")
+                    with col_del:
+                        if st.button("❌", key=f"del_file_{up_leerjaar}_{up_hst}_{b}", help="Verwijder dit bestand"):
+                            if gebruik_supabase:
+                                try:
+                                    supabase.storage.from_("lesmateriaal").remove([f"{up_leerjaar}/{up_hst}/{b}"])
+                                except Exception as e:
+                                    pass
+                            lokaal_pad = os.path.join("lesmateriaal", up_leerjaar, up_hst, b)
+                            if os.path.exists(lokaal_pad):
+                                os.remove(lokaal_pad)
+                            st.success(f"Verwijderd: {b}")
+                            time.sleep(1)
+                            st.rerun()
+            else:
+                st.info("Nog geen lesmateriaal geüpload in deze map.")
+                
+            st.divider()
+            
+            # Dynamische uploader key om veld te clearen na succes
+            if "upload_key" not in st.session_state:
+                st.session_state.upload_key = 0
+                
+            uploaded_files = st.file_uploader(f"Nieuwe les(sen) uploaden (.docx)", type=["docx"], accept_multiple_files=True, key=f"uploader_{st.session_state.upload_key}")
+            
             if uploaded_files:
                 if st.button("Opslaan & Uploaden", type="primary"):
                     for uploaded_file in uploaded_files:
@@ -629,7 +661,11 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
                             os.makedirs(upload_map)
                         with open(os.path.join(upload_map, uploaded_file.name), "wb") as f:
                             f.write(uploaded_file.getbuffer())
+                            
                     st.success(f"✅ {len(uploaded_files)} bestand(en) succesvol geüpload naar {up_leerjaar}/{up_hst}!")
+                    time.sleep(1.5)
+                    st.session_state.upload_key += 1
+                    st.rerun()
 
         with tab_keuren:
             st.write("**Nieuwe aanvragen voor al jouw klassen**")
@@ -858,7 +894,6 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
             with st.form("admin_docent_bewerk"):
                 st.write(f"Gegevens van **{doc_data['Naam']}** ({kies_admin_doc}):")
                 
-                # NIEUW: Multiselect voor docent-klassen
                 huidige_klassen = [k for k in doc_data.get('Klassen', []) if k in ALLE_CLUSTERS]
                 nieuwe_klassen = st.multiselect("Toegewezen klassen:", ALLE_CLUSTERS, default=huidige_klassen, key="admin_doc_klassen")
                 
@@ -872,8 +907,6 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
                         changed = True
                         
                     if nieuw_doc_ww:
-                        # Eventueel kun je hier ook is_sterk_wachtwoord(nieuw_doc_ww) gebruiken, maar docenten
-                        # bepalen zelf de veiligheid voor nu. We slaan de hash op:
                         docs[kies_admin_doc]["WachtwoordHash"] = hash_wachtwoord(nieuw_doc_ww)
                         changed = True
                         
