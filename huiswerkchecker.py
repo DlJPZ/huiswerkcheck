@@ -20,7 +20,7 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # Pas deze datum aan wanneer je een update doet!
-LAATSTE_UPDATE = "13 september 2026"
+LAATSTE_UPDATE = "14 september 2026"
 
 # 1. API & Cloud instellen
 if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
@@ -44,20 +44,28 @@ try:
 except Exception:
     pass
 
-# Google Sheets Connectie
+# Google Sheets Connectie - NU MET CACHE OM API LIMITS TE VOORKOMEN!
+@st.cache_resource
+def connect_google_sheets():
+    try:
+        if "GCP_JSON" in st.secrets and "GSHEET_URL" in st.secrets:
+            creds_dict = json.loads(st.secrets["GCP_JSON"])
+            scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+            gspread_client = gspread.authorize(creds)
+            doc = gspread_client.open_by_url(st.secrets["GSHEET_URL"])
+            return doc, None
+        return None, None
+    except Exception as e:
+        return None, str(e)
+
 gebruik_gsheets = False
-google_doc = None
-try:
-    if "GCP_JSON" in st.secrets and "GSHEET_URL" in st.secrets:
-        creds_dict = json.loads(st.secrets["GCP_JSON"])
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gspread_client = gspread.authorize(creds)
-        sheet_url = st.secrets["GSHEET_URL"]
-        google_doc = gspread_client.open_by_url(sheet_url)
-        gebruik_gsheets = True
-except Exception as e:
-    st.error(f"🚨 Google Sheets Connectie Fout: {e}")
+google_doc, gsheet_fout = connect_google_sheets()
+
+if gsheet_fout:
+    st.error(f"🚨 Google Sheets Connectie Fout: {gsheet_fout}")
+elif google_doc:
+    gebruik_gsheets = True
 
 # Functie om de Picture of the Day op te halen
 @st.cache_data(ttl=43200)
@@ -636,7 +644,6 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
                 
             st.divider()
             
-            # Dynamische uploader key om veld te clearen na succes
             if "upload_key" not in st.session_state:
                 st.session_state.upload_key = 0
                 
