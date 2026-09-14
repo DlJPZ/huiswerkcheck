@@ -13,7 +13,6 @@ import time
 import json
 import gspread
 import io
-import hmac
 from google.oauth2.service_account import Credentials
 
 # 0. Paginainstellingen
@@ -175,7 +174,6 @@ def kleur_onvoldoendes(row):
         pass
     return [''] * len(row)
 
-# NIEUW: boek_dicht toegevoegd aan de parameters
 def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cijfer, beoordeling, boek_dicht):
     if st.session_state.get("toets_ingeleverd", False):
         return
@@ -333,7 +331,15 @@ def laad_docenten():
             reader = csv.DictReader(f, delimiter=";")
             for row in reader:
                 if "DocentID" in row:
-                    row["Klassen"] = row["Klassen"].split(",") if row["Klassen"] else []
+                    # Veilige parsing van klassen (beschermt tegen list-strings)
+                    k = row.get("Klassen", "")
+                    if isinstance(k, str):
+                        row["Klassen"] = k.split(",") if k else []
+                    elif isinstance(k, list):
+                        row["Klassen"] = k
+                    else:
+                        row["Klassen"] = []
+                        
                     if "Goedgekeurd" not in row:
                         row["Goedgekeurd"] = "Ja" 
                     docs[row["DocentID"]] = row
@@ -342,7 +348,15 @@ def laad_docenten():
         try:
             response = supabase.table('docenten').select("*").execute()
             for row in response.data:
-                row["Klassen"] = row["Klassen"].split(",") if row["Klassen"] else []
+                # Veilige parsing van klassen (beschermt tegen array data types)
+                k = row.get("Klassen", "")
+                if isinstance(k, str):
+                    row["Klassen"] = k.split(",") if k else []
+                elif isinstance(k, list):
+                    row["Klassen"] = k
+                else:
+                    row["Klassen"] = []
+                    
                 if "Goedgekeurd" not in row:
                     row["Goedgekeurd"] = "Ja"
                 docs[row["DocentID"]] = row
@@ -358,7 +372,7 @@ def bewaar_alle_docenten(docs_dict):
         writer.writeheader()
         for doc_id, doc_data in docs_dict.items():
             save_data = doc_data.copy()
-            if isinstance(save_data["Klassen"], list):
+            if isinstance(save_data.get("Klassen"), list):
                 save_data["Klassen"] = ",".join(save_data["Klassen"])
             writer.writerow(save_data)
             
@@ -366,7 +380,7 @@ def bewaar_alle_docenten(docs_dict):
         fouten = []
         for doc_data in docs_dict.values():
             save_data = doc_data.copy()
-            if isinstance(save_data["Klassen"], list):
+            if isinstance(save_data.get("Klassen"), list):
                 save_data["Klassen"] = ",".join(save_data["Klassen"])
             try:
                 supabase.table('docenten').upsert(save_data).execute()
@@ -474,8 +488,10 @@ elif not st.session_state.get("ingelogd"):
                 submitted_docent = st.form_submit_button("Log in als docent")
                 
                 if submitted_docent:
-                    admin_ww = str(st.secrets.get("ADMIN_WACHTWOORD", ""))
-                    if d_login == "admin" and hmac.compare_digest(d_ww.encode("utf-8"), admin_ww.encode("utf-8")):
+                    admin_ww = str(st.secrets.get("ADMIN_WACHTWOORD", "")).strip()
+                    
+                    # Directe, tolerantere check voor Admin (negeert spaties en hoofdletters)
+                    if d_login.strip().lower() == "admin" and d_ww.strip() == admin_ww:
                         st.session_state["login_pogingen_docent"] = 0 
                         st.session_state.ingelogd = True
                         st.session_state.rol = "admin"
@@ -483,20 +499,22 @@ elif not st.session_state.get("ingelogd"):
                         st.rerun()
                     else:
                         docs = laad_docenten()
-                        if d_login in docs and controleer_wachtwoord(d_ww, docs[d_login]["WachtwoordHash"]):
-                            if docs[d_login].get("Goedgekeurd") == "Ja":
-                                st.session_state["login_pogingen_docent"] = 0 
-                                st.session_state.ingelogd = True
-                                st.session_state.rol = "docent"
-                                st.session_state.docent_id = d_login
-                                st.session_state.docent_naam = docs[d_login]["Naam"]
-                                st.session_state.docent_klassen = docs[d_login]["Klassen"]
-                                st.rerun()
-                            else:
-                                st.error("Je account wacht nog op goedkeuring van de beheerder.")
-                        else:
+                        if d_login not in docs:
                             registreer_fout_inlog("docent")
-                            st.error(f"Onjuiste inloggegevens. Poging {st.session_state['login_pogingen_docent']}/5")
+                            st.error(f"Onjuiste inloggegevens. Gebruikersnaam onbekend. Poging {st.session_state['login_pogingen_docent']}/5")
+                        elif not controleer_wachtwoord(d_ww, docs[d_login]["WachtwoordHash"]):
+                            registreer_fout_inlog("docent")
+                            st.error(f"Onjuiste inloggegevens. Wachtwoord onjuist. Poging {st.session_state['login_pogingen_docent']}/5")
+                        elif docs[d_login].get("Goedgekeurd") == "Ja":
+                            st.session_state["login_pogingen_docent"] = 0 
+                            st.session_state.ingelogd = True
+                            st.session_state.rol = "docent"
+                            st.session_state.docent_id = d_login
+                            st.session_state.docent_naam = docs[d_login]["Naam"]
+                            st.session_state.docent_klassen = docs[d_login]["Klassen"]
+                            st.rerun()
+                        else:
+                            st.error("Je account wacht nog op goedkeuring van de beheerder.")
                 
     with tab_d_reg:
         with st.form("docent_reg_form"):
@@ -955,7 +973,17 @@ elif not st.session_state.get("ingelogd"):
                 
                 if submitted_login:
                     gebruikers = laad_gebruikers()
-                    if login_gn in gebruikers and controleer_wachtwoord(login_ww, gebruikers[login_gn]["WachtwoordHash"]):
+                    if login_gn not in gebruikers:
+                        registreer_fout_inlog("leerling")
+                        st.error("❌ De ingevulde inlognaam is onbekend in het systeem. Let op typefouten of maak een nieuw account aan.")
+                        tijd_nu = datetime.datetime.now().strftime("%H:%M:%S")
+                        st.info(f"🔧 **Technische melding (stuur dit naar docent):**\n`ERR-USER-NOT-FOUND | Usr:{login_gn} | TS:{tijd_nu}`")
+                    elif not controleer_wachtwoord(login_ww, gebruikers[login_gn]["WachtwoordHash"]):
+                        registreer_fout_inlog("leerling")
+                        st.error("❌ Het ingevulde wachtwoord is onjuist.")
+                        poging_str = f"{st.session_state['login_pogingen_leerling']}/5"
+                        st.info(f"🔧 **Technische melding (stuur dit naar docent):**\n`ERR-PASS-INVALID | Usr:{login_gn} | Poging:{poging_str}`")
+                    else:
                         if gebruikers[login_gn].get("Goedgekeurd", "Ja") == "Ja":
                             st.session_state["login_pogingen_leerling"] = 0 
                             st.session_state.ingelogd = True
@@ -967,9 +995,6 @@ elif not st.session_state.get("ingelogd"):
                             st.rerun()
                         else:
                             st.warning("⏳ Je account is nog niet goedgekeurd door je docent. Werk zolang via het tabblad 'Gasttoegang'.")
-                    else:
-                        registreer_fout_inlog("leerling")
-                        st.error(f"Onjuiste inloggegevens. Poging {st.session_state['login_pogingen_leerling']}/5")
 
         # Wachtwoord vergeten formulier met veilige, automatische webhook
         st.divider()
