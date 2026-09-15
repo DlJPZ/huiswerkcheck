@@ -21,7 +21,7 @@ st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # Pas deze datum aan wanneer je een update doet!
 LAATSTE_UPDATE = "15 september 2026"
-VERSIE = "3.0.1"
+VERSIE = "3.0.2"
 
 # 1. API & Cloud instellen
 if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
@@ -672,42 +672,47 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
                     st.rerun()
 
         with tab_keuren:
-            st.write("**Nieuwe aanvragen voor al jouw klassen**")
-            te_keuren = {gn: d for gn, d in alle_gebruikers.items() if d.get("Cluster") in mijn_klassen and d.get("Goedgekeurd", "Ja") == "Nee"}
-            
-            if not te_keuren:
-                st.info("Er zijn op dit moment geen openstaande aanvragen.")
+            st.write("**Nieuwe aanvragen per klas**")
+            if not mijn_klassen:
+                st.info("Je hebt nog geen klassen toegewezen gekregen.")
             else:
-                for gn, d_info in te_keuren.items():
-                    col_info, col_nr, col_ok, col_weiger = st.columns([3, 1, 1, 1])
-                    with col_info:
-                        st.write(f"🎓 **{d_info['Voornaam']}** (`{gn}`) - Klas: **{d_info.get('Cluster', '?')}**")
-                    with col_nr:
-                        toegekend_nr = st.text_input("Klassennummer", key=f"nr_{gn}", placeholder="Bijv. 1")
-                    with col_ok:
-                        if st.button("✅ Goedkeuren", key=f"ok_ll_{gn}"):
-                            alle_gebruikers[gn]["Goedgekeurd"] = "Ja"
-                            alle_gebruikers[gn]["Nummer"] = toegekend_nr if toegekend_nr else "999"
-                            bewaar_alle_gebruikers(alle_gebruikers)
-                            st.success(f"{d_info['Voornaam']} is goedgekeurd met nummer {toegekend_nr}!")
-                            time.sleep(1)
-                            st.rerun()
-                    with col_weiger:
-                        if st.button("❌ Weigeren", key=f"weiger_ll_{gn}"):
-                            if gebruik_supabase:
-                                try:
-                                    supabase.table("gebruikers").delete().eq("Gebruikersnaam", gn).execute()
-                                except Exception:
-                                    pass
-                            del alle_gebruikers[gn]
-                            with open("gebruikers.csv", "w", newline="", encoding="utf-8") as f:
-                                fieldnames = ["Gebruikersnaam", "WachtwoordHash", "Voornaam", "Niveau", "Cluster", "Goedgekeurd", "Nummer"]
-                                writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";", extrasaction='ignore')
-                                writer.writeheader()
-                                writer.writerows(alle_gebruikers.values())
-                            st.warning(f"Aanvraag van {d_info['Voornaam']} verwijderd.")
-                            time.sleep(1)
-                            st.rerun()
+                keuze_klas_keuren = st.selectbox("Kies een klas om aanvragen te bekijken:", mijn_klassen, key="keuze_klas_keuren")
+                
+                te_keuren = {gn: d for gn, d in alle_gebruikers.items() if d.get("Cluster") == keuze_klas_keuren and d.get("Goedgekeurd", "Ja") == "Nee"}
+                
+                if not te_keuren:
+                    st.info(f"Er zijn op dit moment geen openstaande aanvragen voor {keuze_klas_keuren}.")
+                else:
+                    for gn, d_info in te_keuren.items():
+                        col_info, col_nr, col_ok, col_weiger = st.columns([3, 1, 1, 1])
+                        with col_info:
+                            st.write(f"🎓 **{d_info['Voornaam']}** (`{gn}`)")
+                        with col_nr:
+                            toegekend_nr = st.text_input("Klassennummer", key=f"nr_{gn}", placeholder="Bijv. 1")
+                        with col_ok:
+                            if st.button("✅ Goedkeuren", key=f"ok_ll_{gn}"):
+                                alle_gebruikers[gn]["Goedgekeurd"] = "Ja"
+                                alle_gebruikers[gn]["Nummer"] = toegekend_nr if toegekend_nr else "999"
+                                bewaar_alle_gebruikers(alle_gebruikers)
+                                st.success(f"{d_info['Voornaam']} is goedgekeurd met nummer {toegekend_nr}!")
+                                time.sleep(1)
+                                st.rerun()
+                        with col_weiger:
+                            if st.button("❌ Weigeren", key=f"weiger_ll_{gn}"):
+                                if gebruik_supabase:
+                                    try:
+                                        supabase.table("gebruikers").delete().eq("Gebruikersnaam", gn).execute()
+                                    except Exception:
+                                        pass
+                                del alle_gebruikers[gn]
+                                with open("gebruikers.csv", "w", newline="", encoding="utf-8") as f:
+                                    fieldnames = ["Gebruikersnaam", "WachtwoordHash", "Voornaam", "Niveau", "Cluster", "Goedgekeurd", "Nummer"]
+                                    writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";", extrasaction='ignore')
+                                    writer.writeheader()
+                                    writer.writerows(alle_gebruikers.values())
+                                st.warning(f"Aanvraag van {d_info['Voornaam']} verwijderd.")
+                                time.sleep(1)
+                                st.rerun()
 
 elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin":
     # ---------------- ADMIN PANEEL ----------------
