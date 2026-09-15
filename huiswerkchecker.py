@@ -21,7 +21,7 @@ st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # Pas deze datum aan wanneer je een update doet!
 LAATSTE_UPDATE = "15 september 2026"
-VERSIE = "3.0.2"
+VERSIE = "3.0.3"
 
 # 1. API & Cloud instellen
 if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
@@ -683,36 +683,60 @@ if st.session_state.get("ingelogd") and st.session_state.get("rol") == "docent":
                 if not te_keuren:
                     st.info(f"Er zijn op dit moment geen openstaande aanvragen voor {keuze_klas_keuren}.")
                 else:
-                    for gn, d_info in te_keuren.items():
-                        col_info, col_nr, col_ok, col_weiger = st.columns([3, 1, 1, 1])
-                        with col_info:
-                            st.write(f"🎓 **{d_info['Voornaam']}** (`{gn}`)")
-                        with col_nr:
-                            toegekend_nr = st.text_input("Klassennummer", key=f"nr_{gn}", placeholder="Bijv. 1")
-                        with col_ok:
-                            if st.button("✅ Goedkeuren", key=f"ok_ll_{gn}"):
-                                alle_gebruikers[gn]["Goedgekeurd"] = "Ja"
-                                alle_gebruikers[gn]["Nummer"] = toegekend_nr if toegekend_nr else "999"
+                    with st.form("batch_keuren_form"):
+                        st.write("Vink aan of je een leerling wilt **goedkeuren** of **weigeren**. Vul bij goedkeuren direct het klassennummer in. Klik daarna onderaan op 'Verwerk selectie'.")
+                        
+                        col_h1, col_h2, col_h3, col_h4 = st.columns([3, 1, 1, 1])
+                        col_h1.caption("Leerling")
+                        col_h2.caption("Nummer")
+                        col_h3.caption("Goedkeuren")
+                        col_h4.caption("Weigeren")
+                        
+                        acties = {}
+                        for gn, d_info in te_keuren.items():
+                            c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+                            with c1:
+                                st.write(f"🎓 **{d_info['Voornaam']}** (`{gn}`)")
+                            with c2:
+                                nr = st.text_input("Nr", key=f"nr_{gn}", label_visibility="collapsed", placeholder="Bijv. 1")
+                            with c3:
+                                ok = st.checkbox("✅", key=f"ok_{gn}")
+                            with c4:
+                                weiger = st.checkbox("❌", key=f"weiger_{gn}")
+                                
+                            acties[gn] = {"nr": nr, "ok": ok, "weiger": weiger, "naam": d_info['Voornaam']}
+                            
+                        if st.form_submit_button("Verwerk selectie", type="primary"):
+                            gewijzigd = False
+                            verwerkte_namen = []
+                            
+                            for gn, actie in acties.items():
+                                if actie["ok"] and actie["weiger"]:
+                                    st.warning(f"⚠️ {actie['naam']} overgeslagen: Je kunt niet tegelijk goedkeuren en weigeren.")
+                                    continue
+                                    
+                                if actie["ok"]:
+                                    alle_gebruikers[gn]["Goedgekeurd"] = "Ja"
+                                    alle_gebruikers[gn]["Nummer"] = actie["nr"] if actie["nr"] else "999"
+                                    gewijzigd = True
+                                    verwerkte_namen.append(f"{actie['naam']} (Goedgekeurd)")
+                                elif actie["weiger"]:
+                                    if gebruik_supabase:
+                                        try:
+                                            supabase.table("gebruikers").delete().eq("Gebruikersnaam", gn).execute()
+                                        except Exception:
+                                            pass
+                                    del alle_gebruikers[gn]
+                                    gewijzigd = True
+                                    verwerkte_namen.append(f"{actie['naam']} (Geweigerd)")
+                                    
+                            if gewijzigd:
                                 bewaar_alle_gebruikers(alle_gebruikers)
-                                st.success(f"{d_info['Voornaam']} is goedgekeurd met nummer {toegekend_nr}!")
-                                time.sleep(1)
+                                st.success(f"✅ {len(verwerkte_namen)} aanvragen succesvol verwerkt!")
+                                time.sleep(1.5)
                                 st.rerun()
-                        with col_weiger:
-                            if st.button("❌ Weigeren", key=f"weiger_ll_{gn}"):
-                                if gebruik_supabase:
-                                    try:
-                                        supabase.table("gebruikers").delete().eq("Gebruikersnaam", gn).execute()
-                                    except Exception:
-                                        pass
-                                del alle_gebruikers[gn]
-                                with open("gebruikers.csv", "w", newline="", encoding="utf-8") as f:
-                                    fieldnames = ["Gebruikersnaam", "WachtwoordHash", "Voornaam", "Niveau", "Cluster", "Goedgekeurd", "Nummer"]
-                                    writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";", extrasaction='ignore')
-                                    writer.writeheader()
-                                    writer.writerows(alle_gebruikers.values())
-                                st.warning(f"Aanvraag van {d_info['Voornaam']} verwijderd.")
-                                time.sleep(1)
-                                st.rerun()
+                            else:
+                                st.info("Je hebt geen acties geselecteerd om te verwerken.")
 
 elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin":
     # ---------------- ADMIN PANEEL ----------------
