@@ -21,7 +21,7 @@ st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # Pas deze datum aan wanneer je een update doet!
 LAATSTE_UPDATE = "15 september 2026"
-VERSIE = "3.0.3"
+VERSIE = "3.0.4"
 
 # 1. API & Cloud instellen
 if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
@@ -176,7 +176,7 @@ def kleur_onvoldoendes(row):
         pass
     return [''] * len(row)
 
-def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cijfer, beoordeling, boek_dicht):
+def sla_resultaat_op(niveau, cluster, nummer, voornaam, gebruikersnaam, gekozen_les, cijfer, beoordeling, boek_dicht):
     if st.session_state.get("toets_ingeleverd", False):
         return
     st.session_state.toets_ingeleverd = True
@@ -191,6 +191,7 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
             "Tijdstip": tijdstip,
             "Niveau": niveau,
             "Cluster": cluster,
+            "Nummer": nummer,
             "Gebruikersnaam": gebruikersnaam,
             "Voornaam": voornaam,
             "Les": gekozen_les,
@@ -212,9 +213,9 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
                 worksheet = google_doc.worksheet(cluster)
             except gspread.exceptions.WorksheetNotFound:
                 worksheet = google_doc.add_worksheet(title=cluster, rows="100", cols="20")
-                worksheet.append_row(["PogingID", "Tijdstip", "Niveau", "Cluster", "Gebruikersnaam", "Voornaam", "Les", "Cijfer", "Beoordeling", "DocentReactie", "ReactieGelezen", "BoekDicht"])
+                worksheet.append_row(["PogingID", "Tijdstip", "Niveau", "Cluster", "Nummer", "Gebruikersnaam", "Voornaam", "Les", "Cijfer", "Beoordeling", "DocentReactie", "ReactieGelezen", "BoekDicht"])
             
-            rij = [poging_id, tijdstip, niveau, cluster, gebruikersnaam, voornaam, gekozen_les, cijfer, beoordeling, "", "True", boek_dicht]
+            rij = [poging_id, tijdstip, niveau, cluster, nummer, gebruikersnaam, voornaam, gekozen_les, cijfer, beoordeling, "", "True", boek_dicht]
             worksheet.append_row(rij)
         except Exception as e:
             st.error(f"🚨 Fout bij schrijven naar Sheets: {e}")
@@ -225,8 +226,8 @@ def sla_resultaat_op(niveau, cluster, voornaam, gebruikersnaam, gekozen_les, cij
     with open(backup_bestand, mode='a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f, delimiter=';')
         if not bestaat_al:
-            writer.writerow(["PogingID", "Tijdstip", "Niveau", "Cluster", "Gebruikersnaam", "Voornaam", "Les", "Cijfer", "Beoordeling", "DocentReactie", "ReactieGelezen", "BoekDicht"])
-        writer.writerow([poging_id, tijdstip, niveau, cluster, gebruikersnaam, voornaam, gekozen_les, cijfer, beoordeling, "", "True", boek_dicht])
+            writer.writerow(["PogingID", "Tijdstip", "Niveau", "Cluster", "Nummer", "Gebruikersnaam", "Voornaam", "Les", "Cijfer", "Beoordeling", "DocentReactie", "ReactieGelezen", "BoekDicht"])
+        writer.writerow([poging_id, tijdstip, niveau, cluster, nummer, gebruikersnaam, voornaam, gekozen_les, cijfer, beoordeling, "", "True", boek_dicht])
 
 def haal_alle_resultaten_op():
     if gebruik_supabase:
@@ -991,6 +992,7 @@ elif not st.session_state.get("ingelogd"):
                             st.session_state.voornaam = gebruikers[login_gn]["Voornaam"]
                             st.session_state.niveau = gebruikers[login_gn]["Niveau"]
                             st.session_state.cluster = gebruikers[login_gn]["Cluster"]
+                            st.session_state.nummer = gebruikers[login_gn].get("Nummer", "999")
                             st.rerun()
                         else:
                             st.warning("⏳ Je account is nog niet goedgekeurd door je docent. Werk zolang via het tabblad 'Gasttoegang'.")
@@ -1082,6 +1084,7 @@ elif not st.session_state.get("ingelogd"):
                     st.session_state.voornaam = f"{gast_voornaam.strip()} (Gast)"
                     st.session_state.niveau = gast_niveau
                     st.session_state.cluster = gast_cluster
+                    st.session_state.nummer = "Gast"
                     st.rerun()
 
 elif st.session_state.get("rol") == "leerling":
@@ -1252,10 +1255,17 @@ elif st.session_state.get("rol") == "leerling":
                                             
                                             boek_dicht_status = "Ja" if "Ja" in boek_dicht_keuze else "Nee"
                                             
-                                            # Resultaat wegschrijven
+                                            # Resultaat wegschrijven met st.session_state.nummer
                                             sla_resultaat_op(
-                                                st.session_state.niveau, st.session_state.cluster, st.session_state.voornaam,
-                                                st.session_state.gebruikersnaam, gekozen_les, st.session_state.huidig_cijfer, ai_beoordeling, boek_dicht_status
+                                                st.session_state.niveau, 
+                                                st.session_state.cluster, 
+                                                st.session_state.get("nummer", "999"), 
+                                                st.session_state.voornaam,
+                                                st.session_state.gebruikersnaam, 
+                                                gekozen_les, 
+                                                st.session_state.huidig_cijfer, 
+                                                ai_beoordeling, 
+                                                boek_dicht_status
                                             )
                                             st.rerun()
                                         except Exception as e:
