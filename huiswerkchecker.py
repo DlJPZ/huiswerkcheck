@@ -21,7 +21,7 @@ st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # Pas deze datum aan wanneer je een update doet!
 LAATSTE_UPDATE = "15 september 2026"
-VERSIE = "3.0.4"
+VERSIE = "3.0.5"
 
 # 1. API & Cloud instellen
 if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
@@ -779,6 +779,26 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
             if leerlingen_in_admin_klas:
                 st.write(f"Er zijn **{len(leerlingen_in_admin_klas)}** leerlingen geregistreerd in {kies_admin_klas}.")
                 
+                # --- DOWNLOAD LIJST ---
+                ll_sorted_admin = sorted(leerlingen_in_admin_klas.items(), key=lambda x: int(re.sub(r'\D', '', str(x[1].get("Nummer", "999"))) or 999))
+                
+                export_data = []
+                for gn, ll_data in ll_sorted_admin:
+                    export_data.append({
+                        "Nummer": ll_data.get("Nummer", "999"),
+                        "Voornaam": ll_data.get("Voornaam", ""),
+                        "Inlognaam": gn
+                    })
+                df_export = pd.DataFrame(export_data)
+                csv_export = df_export.to_csv(index=False, sep=";").encode('utf-8')
+                
+                st.download_button(
+                    label=f"📥 Download inloglijst {kies_admin_klas} (CSV)",
+                    data=csv_export,
+                    file_name=f"inloglijst_{kies_admin_klas}.csv",
+                    mime="text/csv",
+                )
+                
                 # --- BULK VERWIJDER PANEEL ---
                 st.write("### 🗑️ Bulk Verwijderen")
                 select_all = st.checkbox("Selecteer ALLE leerlingen in deze klas")
@@ -820,8 +840,6 @@ elif st.session_state.get("ingelogd") and st.session_state.get("rol") == "admin"
                 col_h4.caption("Pas klas aan")
                 col_h5.caption("Nieuw wachtwoord")
                 col_h6.caption("Opslaan")
-                
-                ll_sorted_admin = sorted(leerlingen_in_admin_klas.items(), key=lambda x: int(re.sub(r'\D', '', str(x[1].get("Nummer", "999"))) or 999))
                 
                 for gn, ll_data in ll_sorted_admin:
                     col_naam, col_nr, col_edit_vn, col_edit_klas, col_edit_ww, col_save = st.columns([2, 1, 2, 2, 2, 1])
