@@ -6,5 +6,3 @@ openpyxl
 requests
 bcrypt
 supabase
-gspread
-google-auth
