@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+backup_resultaten.csv
+Resultaten_*.xlsx
+.streamlit/secrets.toml
