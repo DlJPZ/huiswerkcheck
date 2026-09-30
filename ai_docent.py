@@ -35,7 +35,7 @@ def genereer_toets_gecached(les_tekst, niveau, versie):
     --- THEORIE ---
     {les_tekst}
     """
-    response = ai_client.models.generate_content(model='gemini-3.5-flash-lite', contents=json_prompt)
+    response = ai_client.models.generate_content(model='gemini-3.8-flash', contents=json_prompt)
     return extract_json(response.text)
 
 def kijk_toets_na(niveau, voornaam, les_tekst, vragen_data, antwoorden):
