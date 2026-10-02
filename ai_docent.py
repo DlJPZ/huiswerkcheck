@@ -1,6 +1,7 @@
 import streamlit as st
 import re
 import json
+import math
 from config import ai_client
 
 def extract_json(raw_text):
@@ -9,6 +10,37 @@ def extract_json(raw_text):
     if match:
         return json.loads(match.group(1).strip())
     return json.loads(raw_text.strip())
+
+
+def valideer_toets(data):
+    vragen = data.get("vragen") if isinstance(data, dict) else None
+    if not isinstance(vragen, list) or len(vragen) != 6:
+        raise ValueError("De toets moet precies zes vragen bevatten. Probeer opnieuw.")
+    ids = set()
+    typen = []
+    for vraag in vragen:
+        if not isinstance(vraag, dict):
+            raise ValueError("Ongeldige vraag ontvangen.")
+        vraag_id = vraag.get("id")
+        if type(vraag_id) is not int or vraag_id in ids:
+            raise ValueError("Vraagnummer ontbreekt of komt dubbel voor.")
+        ids.add(vraag_id)
+        if not isinstance(vraag.get("vraag"), str) or not vraag["vraag"].strip():
+            raise ValueError("Vraagtekst ontbreekt.")
+        typen.append(vraag.get("type"))
+        if vraag.get("type") == "mc":
+            opties = vraag.get("opties")
+            correct = vraag.get("correct")
+            if (not isinstance(opties, list) or len(opties) != 4
+                    or any(not isinstance(optie, str) or not re.match(
+                        rf"^{letter}[).:\s]", optie.strip(), re.I)
+                        for letter, optie in zip("ABCD", opties))
+                    or not isinstance(correct, str)
+                    or correct.strip().upper() not in list("ABCD")):
+                raise ValueError("Meerkeuzevraag heeft ongeldige opties of geen geldig antwoord.")
+    if typen != ["mc"] * 4 + ["open"] * 2:
+        raise ValueError("De toets moet vier meerkeuzevragen en daarna twee open vragen bevatten.")
+    return data
 
 @st.cache_data(show_spinner=False)
 def genereer_toets_gecached(les_tekst, niveau, versie):
@@ -36,10 +68,11 @@ def genereer_toets_gecached(les_tekst, niveau, versie):
     {les_tekst}
     """
     response = ai_client.models.generate_content(model='gemini-3.8-flash', contents=json_prompt)
-    return extract_json(response.text)
+    return valideer_toets(extract_json(response.text))
 
 def kijk_toets_na(niveau, voornaam, les_tekst, vragen_data, antwoorden):
     """Fase 3: Kijkt MC lokaal na en gebruikt Gemini Pro voor de open vragen."""
+    valideer_toets(vragen_data)
     mc_score = 0.0
     mc_feedback = ""
     open_vragen_text = ""
@@ -49,7 +82,8 @@ def kijk_toets_na(niveau, voornaam, les_tekst, vragen_data, antwoorden):
         gegeven = antwoorden.get(v['id'], '')
         if v.get('type') == 'mc':
             correcte_letter = v.get('correct', '').strip().upper()
-            is_goed = gegeven.strip().upper().startswith(correcte_letter)
+            juiste_optie = v['opties']["ABCD".index(correcte_letter)]
+            is_goed = gegeven == juiste_optie
             if is_goed:
                 mc_score += 1.0
                 mc_feedback += f"**Vraag {idx + 1} (MC):** ✅ Goed antwoord ({correcte_letter}).\n\n"
@@ -79,7 +113,17 @@ def kijk_toets_na(niveau, voornaam, les_tekst, vragen_data, antwoorden):
     resp = ai_client.models.generate_content(model='gemini-3.1-pro', contents=prompt_nakijken)
     ai_eval = extract_json(resp.text)
     
-    open_score = float(ai_eval.get("score_open_vragen_totaal", 0.0))
+    if not isinstance(ai_eval, dict):
+        raise ValueError("Ongeldige beoordeling ontvangen. Probeer opnieuw.")
+    waarde = ai_eval.get("score_open_vragen_totaal")
+    if isinstance(waarde, bool) or not isinstance(waarde, (int, float, str)):
+        raise ValueError("De beoordeling bevat geen geldige score.")
+    open_score = float(waarde)
+    if not math.isfinite(open_score) or not 0.0 <= open_score <= 6.0:
+        raise ValueError("De score voor open vragen moet tussen 0 en 6 liggen.")
+    for veld in ("beoordeling_open_vragen", "docenten_feedback"):
+        if not isinstance(ai_eval.get(veld), str) or not ai_eval[veld].strip():
+            raise ValueError("De beoordeling bevat geen volledige feedback.")
     totaal_score = mc_score + open_score
     
     volledige_feedback = mc_feedback + ai_eval.get("beoordeling_open_vragen", "")

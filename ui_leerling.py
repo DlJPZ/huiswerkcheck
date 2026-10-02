@@ -5,15 +5,15 @@ import re
 import time
 from config import HOOFDSTUKKEN, supabase
 from auth import controleer_wachtwoord, hash_wachtwoord, is_sterk_wachtwoord, laad_gebruikers, bewaar_alle_gebruikers
-from bestanden import get_leerjaar, haal_bestanden_op, lees_docx, haal_alle_resultaten_op, sla_resultaat_op
+from bestanden import get_leerjaar, haal_bestanden_op, lees_docx, haal_alle_resultaten_op, sla_resultaat_op, les_id, les_resultaat_mask
 from ai_docent import genereer_toets_gecached, kijk_toets_na
 
 def toon_leerling_paneel():
     st.title("🗺️ Huiswerkcontrole AK")
     
     # 1. Haal uitsluitend uit Supabase de geschiedenis van deze leerling
-    if "mijn_data_geschiedenis" not in st.session_state:
-        st.session_state.mijn_data_geschiedenis = haal_alle_resultaten_op()
+    st.session_state.mijn_data_geschiedenis = haal_alle_resultaten_op()
+    is_gast = st.session_state.get("is_gast", False)
 
     if not st.session_state.mijn_data_geschiedenis.empty:
         df_mijn = st.session_state.mijn_data_geschiedenis[st.session_state.mijn_data_geschiedenis["Gebruikersnaam"] == st.session_state.gebruikersnaam]
@@ -27,16 +27,26 @@ def toon_leerling_paneel():
         # Anti-cheating block
         st.html("""
             <script>
-            const parent = window.parent.document;
-            parent.onpaste = function(e){
-                if(e.target.tagName === 'TEXTAREA') {
+            if (!window.huiswerkPlakBlokkade) {
+              window.huiswerkPlakBlokkade = true;
+              const inToets = target => {
+                const form = target.closest('[data-testid="stForm"]');
+                return form && [...form.querySelectorAll('button')].some(
+                  button => button.textContent.trim() === 'Lever in');
+              };
+              document.addEventListener('paste', function(e){
+                if(inToets(e.target) && e.target.tagName === 'TEXTAREA') {
                     e.preventDefault();
                 }
-            };
-            parent.oncontextmenu = function(e){ e.preventDefault(); };
-            parent.onselectstart = function(e){ e.preventDefault(); };
+              });
+              for (const type of ['contextmenu', 'selectstart']) {
+                document.addEventListener(type, function(e){
+                  if(inToets(e.target) && !e.target.closest('input, textarea')) e.preventDefault();
+                });
+              }
+            }
             </script>
-        """)
+        """, unsafe_allow_javascript=True)
 
         st.write(f"Klas: **{st.session_state.cluster}**")
         lj = get_leerjaar(st.session_state.cluster)
@@ -55,22 +65,29 @@ def toon_leerling_paneel():
                 st.divider()
 
                 if gekozen_les != "-- Kies een paragraaf --":
+                    gekozen_les_id = les_id(lj, kies_hst, gekozen_les)
                     # Controleer of de leerling aan zijn max zit via Supabase
                     df_all = haal_alle_resultaten_op()
                     aantal_pogingen = 0
-                    if not df_all.empty and not "Gast" in st.session_state.voornaam:
-                        df_les = df_all[(df_all["Gebruikersnaam"] == st.session_state.gebruikersnaam) & (df_all["Les"] == gekozen_les)]
+                    if not df_all.empty and not is_gast:
+                        df_leerling = df_all[(df_all["Gebruikersnaam"] == st.session_state.gebruikersnaam) & (df_all["Cluster"] == st.session_state.cluster)]
+                        df_les = df_leerling[les_resultaat_mask(df_leerling["Les"], lj, kies_hst, gekozen_les)]
                         aantal_pogingen = len(df_les)
                     
-                    if aantal_pogingen >= 3:
+                    afgerond = (st.session_state.get("huidige_les") == gekozen_les_id
+                                and st.session_state.get("toets_ingeleverd", False))
+                    if aantal_pogingen >= 3 and not afgerond:
                         st.error("Je hebt het maximale aantal pogingen (3) voor deze les bereikt. Bestudeer je gemaakte fouten in het resultaten-tabblad.")
                     else:
-                        versie = aantal_pogingen + 1
-                        if not "Gast" in st.session_state.voornaam:
+                        versie = st.session_state.huidige_versie if afgerond else aantal_pogingen + 1
+                        if not is_gast:
                             st.info(f"Dit is poging {versie} van 3 voor deze les.")
                         
-                        if st.session_state.get("huidige_les") != gekozen_les or st.session_state.get("huidige_versie") != versie:
-                            st.session_state.huidige_les = gekozen_les
+                        if st.session_state.get("huidige_les") != gekozen_les_id or st.session_state.get("huidige_versie") != versie:
+                            for sleutel in list(st.session_state):
+                                if sleutel.startswith("q_"):
+                                    del st.session_state[sleutel]
+                            st.session_state.huidige_les = gekozen_les_id
                             st.session_state.huidige_versie = versie
                             st.session_state.vragen_data = None
                             st.session_state.nakijk_resultaat = None
@@ -104,9 +121,9 @@ def toon_leerling_paneel():
                                     for idx, v in enumerate(st.session_state.vragen_data.get("vragen", [])):
                                         st.markdown(f"**Vraag {idx + 1}**")
                                         if v.get('type') == 'mc':
-                                            antwoorden[v['id']] = st.radio(v.get('vraag', 'Vraag?'), v.get('opties', []), key=f"q_{v['id']}")
+                                            antwoorden[v['id']] = st.radio(v.get('vraag', 'Vraag?'), v.get('opties', []), key=f"q_{gekozen_les_id}_{versie}_{v['id']}")
                                         else:
-                                            antwoorden[v['id']] = st.text_area(v.get('vraag', 'Open Vraag?'), key=f"q_{v['id']}")
+                                            antwoorden[v['id']] = st.text_area(v.get('vraag', 'Open Vraag?'), key=f"q_{gekozen_les_id}_{versie}_{v['id']}")
                                         st.write("") 
                                         
                                     submitted = st.form_submit_button("Lever in", type="primary")
@@ -133,13 +150,14 @@ def toon_leerling_paneel():
                                                     st.session_state.get("nummer", "999"), 
                                                     st.session_state.voornaam,
                                                     st.session_state.gebruikersnaam, 
-                                                    gekozen_les, 
+                                                    gekozen_les_id,
                                                     totaal_score, 
                                                     volledige_feedback, 
                                                     boek_dicht_status
                                                 )
                                                 
                                                 if success:
+                                                    st.session_state.toets_ingeleverd = True
                                                     st.session_state.nakijk_resultaat = volledige_feedback
                                                     st.session_state.huidig_cijfer = totaal_score
                                                     st.session_state.docenten_feedback = ai_docent_tekst
@@ -176,7 +194,7 @@ def toon_leerling_paneel():
 
     with tab_geschiedenis:
         st.subheader("Mijn Resultaten & Feedback")
-        if "Gast" in st.session_state.voornaam:
+        if is_gast:
             st.info("💡 Resultaten uit gast-sessies worden hier niet weergegeven.")
         else:
             df_hist = haal_alle_resultaten_op()
@@ -198,15 +216,15 @@ def toon_leerling_paneel():
                                         try:
                                             supabase.table("resultaten").update({"ReactieGelezen": "True"}).eq("PogingID", row["PogingID"]).execute()
                                             st.rerun()
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            st.error(f"Markeren als gelezen mislukt: {e}")
                             else:
                                 st.write("*De docent heeft nog geen extra reactie achtergelaten.*")
                 else:
                     st.info("Je hebt nog geen overhoringen ingeleverd.")
 
     with tab_instellingen:
-        if "Gast" in st.session_state.voornaam:
+        if is_gast:
             st.warning("Gasten hebben geen instellingen.")
         else:
             st.subheader("Wachtwoord Wijzigen")
@@ -218,7 +236,9 @@ def toon_leerling_paneel():
                 if st.form_submit_button("Wijzig Wachtwoord"):
                     gebruikers = laad_gebruikers()
                     oude_gn = st.session_state.gebruikersnaam
-                    if not controleer_wachtwoord(oud_ww, gebruikers[oude_gn]["WachtwoordHash"]): 
+                    if oude_gn not in gebruikers:
+                        st.error("Je account is niet meer beschikbaar. Log opnieuw in.")
+                    elif not controleer_wachtwoord(oud_ww, gebruikers[oude_gn]["WachtwoordHash"]):
                         st.error("Oud wachtwoord onjuist.")
                     elif nieuw_ww != nieuw_ww2: 
                         st.error("Wachtwoorden komen niet overeen.")
@@ -229,7 +249,7 @@ def toon_leerling_paneel():
                         else:
                             gebruikers[oude_gn]["WachtwoordHash"] = hash_wachtwoord(nieuw_ww)
                             try:
-                                supabase.table('gebruikers').upsert(gebruikers[oude_gn]).execute()
+                                bewaar_alle_gebruikers(gebruikers)
                                 st.success("✅ Wachtwoord succesvol gewijzigd!")
                             except Exception as e:
                                 st.error(f"Fout bij wijzigen wachtwoord: {e}")

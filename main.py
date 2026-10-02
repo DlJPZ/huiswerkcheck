@@ -46,7 +46,7 @@ elif not st.session_state.get("ingelogd"):
                 
                 if submitted_docent:
                     admin_ww = str(st.secrets.get("ADMIN_WACHTWOORD", "")).strip()
-                    if d_login.strip().lower() == "admin" and hmac.compare_digest(d_ww.encode("utf-8"), admin_ww.encode("utf-8")):
+                    if admin_ww and d_login.strip().lower() == "admin" and hmac.compare_digest(d_ww.encode("utf-8"), admin_ww.encode("utf-8")):
                         st.session_state["login_pogingen_docent"] = 0 
                         st.session_state.ingelogd = True
                         st.session_state.rol = "admin"
@@ -84,7 +84,7 @@ elif not st.session_state.get("ingelogd"):
                     st.error("Vul alles in en kies minimaal 1 klas.")
                 else:
                     docs = laad_docenten()
-                    if reg_d_login in docs:
+                    if reg_d_login.strip().lower() == "admin" or reg_d_login in docs:
                         st.error("Gebruikersnaam al bezet.")
                     else:
                         docs[reg_d_login] = {
@@ -147,6 +147,7 @@ elif not st.session_state.get("ingelogd"):
                             st.session_state["login_pogingen_leerling"] = 0 
                             st.session_state.ingelogd = True
                             st.session_state.rol = "leerling"
+                            st.session_state.is_gast = False
                             st.session_state.gebruikersnaam = login_gn
                             st.session_state.voornaam = gebruikers[login_gn]["Voornaam"]
                             st.session_state.niveau = gebruikers[login_gn]["Niveau"]
@@ -173,7 +174,10 @@ elif not st.session_state.get("ingelogd"):
                                 "message": f"Leerling {vergeten_naam} uit klas {vergeten_klas} kan niet inloggen.",
                                 "_subject": f"🚨 Wachtwoord reset aangevraagd: {vergeten_naam} ({vergeten_klas})"
                             }
-                            requests.post("https://formsubmit.co/ajax/jjvddool@pieterzandt.nl", data=post_data)
+                            response = requests.post("https://formsubmit.co/ajax/jjvddool@pieterzandt.nl", data=post_data, timeout=15)
+                            response.raise_for_status()
+                            if str(response.json().get("success")).lower() != "true":
+                                raise ValueError("De aanvraag is niet geaccepteerd.")
                             st.success("✅ Aanvraag is verstuurd!")
                         except Exception as e:
                             st.error("Er ging iets mis met het versturen.")
@@ -231,6 +235,7 @@ elif not st.session_state.get("ingelogd"):
                     st.session_state["login_pogingen_leerling"] = 0 
                     st.session_state.ingelogd = True
                     st.session_state.rol = "leerling"
+                    st.session_state.is_gast = True
                     st.session_state.gebruikersnaam = f"gast_{uuid.uuid4().hex[:6]}"
                     st.session_state.voornaam = f"{gast_voornaam.strip()} (Gast)"
                     st.session_state.niveau = gast_niveau

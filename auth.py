@@ -2,7 +2,48 @@ import streamlit as st
 import bcrypt
 import re
 import time
+from copy import deepcopy
 from config import supabase
+from bestanden import haal_tabel_op
+
+
+class AccountOverzicht(dict):
+    """Bewaar de gelezen waarden om uitsluitend gewijzigde velden te schrijven."""
+    def __init__(self, waarden):
+        super().__init__(waarden)
+        self.origineel = deepcopy(waarden)
+
+
+def bewaar_account_wijzigingen(tabel, sleutel, overzicht):
+    if not isinstance(overzicht, AccountOverzicht):
+        raise ValueError("Gebruik het overzicht dat door de laadfunctie is teruggegeven.")
+    for account_id, gegevens in overzicht.items():
+        origineel = overzicht.origineel.get(account_id)
+        wijzigingen = {k: v for k, v in gegevens.items()
+                       if origineel is None or origineel.get(k) != v}
+        if not wijzigingen:
+            continue
+        if isinstance(wijzigingen.get("Klassen"), list):
+            wijzigingen["Klassen"] = ",".join(wijzigingen["Klassen"])
+        if origineel is None:
+            # Een gelijktijdige registratie mag nooit een bestaand account vervangen.
+            response = supabase.table(tabel).insert(wijzigingen).execute()
+        else:
+            response = (supabase.table(tabel).update(wijzigingen)
+                        .eq(sleutel, account_id).execute())
+        if not response.data:
+            raise RuntimeError("Geen account opgeslagen. Het account is mogelijk verwijderd of toegang is geweigerd.")
+        overzicht.origineel[account_id] = deepcopy(gegevens)
+
+
+def verwijder_account(tabel, sleutel, account_id):
+    try:
+        response = supabase.table(tabel).delete().eq(sleutel, account_id).execute()
+        if not response.data:
+            raise RuntimeError("Geen account verwijderd. Vernieuw het overzicht en controleer de toegang.")
+    except Exception as e:
+        st.error(f"Verwijderen mislukt: {e}")
+        st.stop()
 
 def hash_wachtwoord(wachtwoord):
     return bcrypt.hashpw(wachtwoord.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -14,6 +55,7 @@ def controleer_wachtwoord(ingevoerd_wachtwoord, opgeslagen_hash):
         return False 
 
 def is_sterk_wachtwoord(wachtwoord):
+    if len(wachtwoord.encode('utf-8')) > 72: return False, "Het wachtwoord mag maximaal 72 UTF-8 bytes bevatten."
     if len(wachtwoord) < 8: return False, "Minimaal 8 tekens lang."
     if not re.search(r'\d', wachtwoord): return False, "Minimaal 1 cijfer vereist."
     if not re.search(r'[^a-zA-Z0-9]', wachtwoord): return False, "Minimaal 1 speciaal teken vereist."
@@ -45,32 +87,27 @@ def registreer_fout_inlog(prefix):
 
 def laad_gebruikers():
     try:
-        response = supabase.table('gebruikers').select("*").execute()
         users = {}
-        for row in response.data:
+        for row in haal_tabel_op('gebruikers', 'Gebruikersnaam'):
             if "Goedgekeurd" not in row: row["Goedgekeurd"] = "Ja"
             if "Nummer" not in row: row["Nummer"] = "999"
             users[row["Gebruikersnaam"]] = row
-        return users
+        return AccountOverzicht(users)
     except Exception as e:
         st.warning(f"Cloud gebruikers ophalen mislukt: {e}")
-        return {}
+        st.stop()
 
 def bewaar_alle_gebruikers(users_dict):
-    fouten = []
-    for user in users_dict.values():
-        try:
-            supabase.table('gebruikers').upsert(user).execute()
-        except Exception as e:
-            fouten.append(str(e))
-    if fouten:
-        st.error(f"🚨 Supabase Fout bij opslaan gebruikers: {fouten[0]}")
+    try:
+        bewaar_account_wijzigingen('gebruikers', 'Gebruikersnaam', users_dict)
+    except Exception as e:
+        st.error(f"🚨 Supabase Fout bij opslaan gebruikers: {e}")
+        st.stop()
 
 def laad_docenten():
     try:
-        response = supabase.table('docenten').select("*").execute()
         docs = {}
-        for row in response.data:
+        for row in haal_tabel_op('docenten', 'DocentID'):
             k = row.get("Klassen", "")
             if isinstance(k, str):
                 row["Klassen"] = k.split(",") if k else []
@@ -81,20 +118,14 @@ def laad_docenten():
                 
             if "Goedgekeurd" not in row: row["Goedgekeurd"] = "Ja"
             docs[row["DocentID"]] = row
-        return docs
+        return AccountOverzicht(docs)
     except Exception as e:
         st.warning(f"Cloud docenten ophalen mislukt: {e}")
-        return {}
+        st.stop()
 
 def bewaar_alle_docenten(docs_dict):
-    fouten = []
-    for doc_data in docs_dict.values():
-        save_data = doc_data.copy()
-        if isinstance(save_data.get("Klassen"), list):
-            save_data["Klassen"] = ",".join(save_data["Klassen"])
-        try:
-            supabase.table('docenten').upsert(save_data).execute()
-        except Exception as e:
-            fouten.append(str(e))
-    if fouten:
-        st.error(f"Cloud opslag fout (Docenten): {fouten[0]}")
+    try:
+        bewaar_account_wijzigingen('docenten', 'DocentID', docs_dict)
+    except Exception as e:
+        st.error(f"Cloud opslag fout (Docenten): {e}")
+        st.stop()

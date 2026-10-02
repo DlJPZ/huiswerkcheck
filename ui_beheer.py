@@ -3,8 +3,8 @@ import pandas as pd
 import re
 import time
 from config import supabase, HOOFDSTUKKEN, ALLE_CLUSTERS, NIVEAUS, LEERJAREN_CLUSTERS
-from auth import laad_gebruikers, bewaar_alle_gebruikers, laad_docenten, bewaar_alle_docenten, hash_wachtwoord, is_sterk_wachtwoord
-from bestanden import haal_alle_resultaten_op, haal_bestanden_op
+from auth import laad_gebruikers, bewaar_alle_gebruikers, laad_docenten, bewaar_alle_docenten, hash_wachtwoord, is_sterk_wachtwoord, verwijder_account
+from bestanden import haal_alle_resultaten_op, haal_bestanden_op, les_resultaat_mask
 
 # Helper functie om leerjaar te bepalen
 def get_leerjaar(cluster_naam):
@@ -75,10 +75,12 @@ def toon_docent_paneel():
                     gemaakt_gn = set()
                     df_check = haal_alle_resultaten_op()
                     if not df_check.empty and "Gebruikersnaam" in df_check.columns and "Les" in df_check.columns:
-                        gelukt = df_check[(df_check["Cluster"] == docent_klas) & (df_check["Les"] == check_les)]
+                        klas_resultaten = df_check[df_check["Cluster"] == docent_klas]
+                        gelukt = klas_resultaten[les_resultaat_mask(klas_resultaten["Les"], lj, check_hst, check_les)]
                         gemaakt_gn = set(gelukt["Gebruikersnaam"].dropna().tolist())
                         
                     alle_gn_in_klas = set(gn for gn, d in ll_sorted)
+                    gemaakt_gn &= alle_gn_in_klas
                     niet_gemaakt_gn = alle_gn_in_klas - gemaakt_gn
                     
                     col1, col2 = st.columns(2)
@@ -196,10 +198,7 @@ def toon_docent_paneel():
                             gewijzigd = True
                             verwerkte_namen.append(f"{actie['naam']} (Goedgekeurd)")
                         elif actie["weiger"]:
-                            try:
-                                supabase.table("gebruikers").delete().eq("Gebruikersnaam", gn).execute()
-                            except Exception:
-                                pass
+                            verwijder_account("gebruikers", "Gebruikersnaam", gn)
                             if gn in alle_gebruikers:
                                 del alle_gebruikers[gn]
                             gewijzigd = True
@@ -239,11 +238,8 @@ def toon_admin_paneel():
                 with col2:
                     if st.button("❌ Weigeren", key=f"del_doc_{d_id}"):
                         if d_id in docs:
+                            verwijder_account("docenten", "DocentID", d_id)
                             del docs[d_id]
-                            try:
-                                supabase.table("docenten").delete().eq("DocentID", d_id).execute()
-                            except:
-                                pass
                         bewaar_alle_docenten(docs)
                         st.warning("Account verwijderd.")
                         time.sleep(1)
@@ -293,10 +289,7 @@ def toon_admin_paneel():
                 if te_verwijderen:
                     if st.button(f"🚨 Verwijder {len(te_verwijderen)} geselecteerde leerling(en) definitief", type="primary"):
                         for gn in te_verwijderen:
-                            try:
-                                supabase.table("gebruikers").delete().eq("Gebruikersnaam", gn).execute()
-                            except Exception:
-                                pass 
+                            verwijder_account("gebruikers", "Gebruikersnaam", gn)
                             if gn in alle_gebruikers:
                                 del alle_gebruikers[gn]
                                 
@@ -369,10 +362,9 @@ def toon_admin_paneel():
                 st.info("Geen leerlingen in deze klas.")
                 
         st.write("**Handmatig nieuwe leerling toevoegen**")
+        nieuw_niv = st.selectbox("Niveau:", list(NIVEAUS.keys()), key="admin_nieuw_niveau")
         with st.form("admin_maak_ll_form"):
-            colA, colB, colC = st.columns(3)
-            with colA:
-                nieuw_niv = st.selectbox("Niveau:", list(NIVEAUS.keys()))
+            colB, colC = st.columns(2)
             with colB:
                 nieuw_klas = st.selectbox("Klas:", NIVEAUS[nieuw_niv])
             with colC:
