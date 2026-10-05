@@ -164,6 +164,26 @@ class Regressies(unittest.TestCase):
                     with self.assertRaises((ValueError, TypeError)):
                         self.ai.kijk_toets_na("Havo", "A", "Theorie", toets(), answers)
 
+    def test_foute_meerkeuze_toont_volledige_juiste_optie(self):
+        vragen = toets()
+        antwoorden = {}
+        for vraag, correct, fout in zip(vragen["vragen"][:4], "ABCD", "BCDA"):
+            vraag["correct"] = correct
+            antwoorden[vraag["id"]] = vraag["opties"]["ABCD".index(fout)]
+        evaluation = {
+            "open_vragen": [
+                {"id": 5, "score": 3.0, "feedback": "Goed"},
+                {"id": 6, "score": 3.0, "feedback": "Goed"},
+            ],
+            "docenten_feedback": "Feedback",
+        }
+        with patch.object(self.ai, "ai_client") as client:
+            client.models.generate_content.return_value.text = json.dumps(evaluation)
+            score, feedback, _ = self.ai.kijk_toets_na("Havo", "Test", "Theorie", vragen, antwoorden)
+        self.assertEqual(score, 6.0)
+        for letter, tekst in zip("ABCD", ["Een", "Twee", "Drie", "Vier"]):
+            self.assertIn(f"Het juiste antwoord was {letter}) {tekst}", feedback)
+
     def test_docx_tabellen_en_volgorde(self):
         document = docx.Document()
         document.add_paragraph("Voor")

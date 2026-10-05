@@ -1,6 +1,9 @@
-# Upgrade 3.2.2
+# Upgrade 3.2.3
 
 Deze versie start overal via `main.py`.
+
+## Feedbackverbetering 3.2.3
+Bij een fout meerkeuzeantwoord toont de feedback de letter én de volledige juiste antwoordoptie.
 
 ## Opstartreparatie 3.2.2
 - De Codespaces-startconfiguratie verwijst nu naar het bestaande `main.py`, in plaats van het verwijderde `huiswerkchecker.py`.

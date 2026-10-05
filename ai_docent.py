@@ -458,7 +458,7 @@ def kijk_toets_na(
                     f"❌ Fout. Je antwoordde "
                     f"'{gekozen_weergave}'. "
                     f"Het juiste antwoord was "
-                    f"{correcte_letter}."
+                    f"{juiste_optie.strip()}"
                 )
 
         else:

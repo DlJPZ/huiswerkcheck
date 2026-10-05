@@ -5,7 +5,7 @@ import datetime
 
 # --- 1. VERSIEBEHEER & PAGINA ---
 LAATSTE_UPDATE = "5 oktober 2026"
-VERSIE = "3.2.2"
+VERSIE = "3.2.3"
 
 def setup_page():
     st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
