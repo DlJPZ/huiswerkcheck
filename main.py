@@ -10,9 +10,9 @@ setup_page()
 # 2. Importeer alle afhankelijkheden uit onze nieuwe blokken
 from config import pas_styling_toe, LAATSTE_UPDATE, VERSIE, ALLE_CLUSTERS, NIVEAUS
 from auth import (
-    check_lockout, registreer_fout_inlog, controleer_wachtwoord, 
-    laad_gebruikers, bewaar_alle_gebruikers, laad_docenten, 
-    bewaar_alle_docenten, hash_wachtwoord, is_sterk_wachtwoord
+    check_lockout, registreer_fout_inlog, reset_login_pogingen, controleer_wachtwoord,
+    haal_gebruiker, haal_docent, account_bestaat, maak_account,
+    hash_wachtwoord, is_sterk_wachtwoord
 )
 from ui_beheer import toon_docent_paneel, toon_admin_paneel
 from ui_leerling import toon_leerling_paneel, toon_mini_game
@@ -47,26 +47,24 @@ elif not st.session_state.get("ingelogd"):
                 if submitted_docent:
                     admin_ww = str(st.secrets.get("ADMIN_WACHTWOORD", "")).strip()
                     if admin_ww and d_login.strip().lower() == "admin" and hmac.compare_digest(d_ww.encode("utf-8"), admin_ww.encode("utf-8")):
-                        st.session_state["login_pogingen_docent"] = 0 
+                        reset_login_pogingen("docent")
                         st.session_state.ingelogd = True
                         st.session_state.rol = "admin"
                         st.session_state.docent_naam = "Beheerder"
                         st.rerun()
                     else:
-                        docs = laad_docenten()
-                        if d_login not in docs:
+                        docent_id = d_login.strip()
+                        docent = haal_docent(docent_id)
+                        if not docent or not controleer_wachtwoord(d_ww, docent.get("WachtwoordHash")):
                             registreer_fout_inlog("docent")
-                            st.error("Onjuiste inloggegevens. Gebruikersnaam onbekend.")
-                        elif not controleer_wachtwoord(d_ww, docs[d_login]["WachtwoordHash"]):
-                            registreer_fout_inlog("docent")
-                            st.error("Onjuiste inloggegevens. Wachtwoord onjuist.")
-                        elif docs[d_login].get("Goedgekeurd") == "Ja":
-                            st.session_state["login_pogingen_docent"] = 0 
+                            st.error("Onjuiste inloggegevens.")
+                        elif docent.get("Goedgekeurd") == "Ja":
+                            reset_login_pogingen("docent")
                             st.session_state.ingelogd = True
                             st.session_state.rol = "docent"
-                            st.session_state.docent_id = d_login
-                            st.session_state.docent_naam = docs[d_login]["Naam"]
-                            st.session_state.docent_klassen = docs[d_login]["Klassen"]
+                            st.session_state.docent_id = docent_id
+                            st.session_state.docent_naam = docent["Naam"]
+                            st.session_state.docent_klassen = docent["Klassen"]
                             st.rerun()
                         else:
                             st.error("Je account wacht nog op goedkeuring van de beheerder.")
@@ -83,19 +81,21 @@ elif not st.session_state.get("ingelogd"):
                 if not reg_d_naam or not reg_d_login or not reg_d_ww or not reg_d_klassen:
                     st.error("Vul alles in en kies minimaal 1 klas.")
                 else:
-                    docs = laad_docenten()
-                    if reg_d_login.strip().lower() == "admin" or reg_d_login in docs:
-                        st.error("Gebruikersnaam al bezet.")
+                    is_sterk, fout = is_sterk_wachtwoord(reg_d_ww)
+                    if not is_sterk:
+                        st.error(fout)
                     else:
-                        docs[reg_d_login] = {
-                            "DocentID": reg_d_login,
-                            "WachtwoordHash": hash_wachtwoord(reg_d_ww),
-                            "Naam": reg_d_naam,
-                            "Klassen": reg_d_klassen,
-                            "Goedgekeurd": "Nee"
-                        }
-                        bewaar_alle_docenten(docs)
-                        st.success("Account gemaakt! Je account moet nog worden goedgekeurd door de beheerder.")
+                        docent_id = reg_d_login.strip()
+                        if docent_id.lower() == "admin" or account_bestaat("docenten", "DocentID", docent_id):
+                            st.error("Gebruikersnaam al bezet.")
+                        else:
+                            maak_account("docenten", "DocentID", docent_id, {
+                                "WachtwoordHash": hash_wachtwoord(reg_d_ww),
+                                "Naam": reg_d_naam.strip(),
+                                "Klassen": reg_d_klassen,
+                                "Goedgekeurd": "Nee"
+                            })
+                            st.success("Account gemaakt! Je account moet nog worden goedgekeurd door de beheerder.")
 
 elif st.session_state.get("rol") in ["docent", "admin"]:
     st.sidebar.success(f"Ingelogd als: {st.session_state.docent_naam}")
@@ -135,24 +135,22 @@ elif not st.session_state.get("ingelogd"):
                 submitted_login = st.form_submit_button("Inloggen")
                 
                 if submitted_login:
-                    gebruikers = laad_gebruikers()
-                    if login_gn not in gebruikers:
+                    gebruikersnaam = login_gn.strip()
+                    gebruiker = haal_gebruiker(gebruikersnaam)
+                    if not gebruiker or not controleer_wachtwoord(login_ww, gebruiker.get("WachtwoordHash")):
                         registreer_fout_inlog("leerling")
-                        st.error("❌ De ingevulde inlognaam is onbekend in het systeem.")
-                    elif not controleer_wachtwoord(login_ww, gebruikers[login_gn]["WachtwoordHash"]):
-                        registreer_fout_inlog("leerling")
-                        st.error("❌ Het ingevulde wachtwoord is onjuist.")
+                        st.error("❌ Onjuiste inloggegevens.")
                     else:
-                        if gebruikers[login_gn].get("Goedgekeurd", "Ja") == "Ja":
-                            st.session_state["login_pogingen_leerling"] = 0 
+                        if gebruiker.get("Goedgekeurd", "Ja") == "Ja":
+                            reset_login_pogingen("leerling")
                             st.session_state.ingelogd = True
                             st.session_state.rol = "leerling"
                             st.session_state.is_gast = False
-                            st.session_state.gebruikersnaam = login_gn
-                            st.session_state.voornaam = gebruikers[login_gn]["Voornaam"]
-                            st.session_state.niveau = gebruikers[login_gn]["Niveau"]
-                            st.session_state.cluster = gebruikers[login_gn]["Cluster"]
-                            st.session_state.nummer = gebruikers[login_gn].get("Nummer", "999")
+                            st.session_state.gebruikersnaam = gebruikersnaam
+                            st.session_state.voornaam = gebruiker["Voornaam"]
+                            st.session_state.niveau = gebruiker["Niveau"]
+                            st.session_state.cluster = gebruiker["Cluster"]
+                            st.session_state.nummer = gebruiker.get("Nummer", "999")
                             st.rerun()
                         else:
                             st.warning("⏳ Je account is nog niet goedgekeurd door je docent.")
@@ -191,7 +189,7 @@ elif not st.session_state.get("ingelogd"):
             reg_voornaam = st.text_input("Wat is je voornaam?")
             reg_cluster = st.selectbox("Jouw klas:", NIVEAUS[reg_niveau], key="reg_cluster_ll")
             reg_gn = st.text_input("Bedenk een inlognaam:")
-            reg_ww = st.text_input("Bedenk een wachtwoord (Min 8 tekens, 1 cijfer, 1 speciaal teken):", type="password")
+            reg_ww = st.text_input("Bedenk een wachtwoord (Min 10 tekens, 1 cijfer, 1 speciaal teken):", type="password")
             reg_ww2 = st.text_input("Herhaal je wachtwoord:", type="password")
             
             if st.form_submit_button("Account Aanmaken"):
@@ -204,20 +202,18 @@ elif not st.session_state.get("ingelogd"):
                     if not is_sterk: 
                         st.error(fout)
                     else:
-                        gebruikers = laad_gebruikers()
-                        if reg_gn in gebruikers: 
+                        gebruikersnaam = reg_gn.strip()
+                        if account_bestaat("gebruikers", "Gebruikersnaam", gebruikersnaam):
                             st.error("❌ Deze inlognaam is al bezet.")
                         else:
-                            gebruikers[reg_gn] = {
-                                "Gebruikersnaam": reg_gn,
+                            maak_account("gebruikers", "Gebruikersnaam", gebruikersnaam, {
                                 "WachtwoordHash": hash_wachtwoord(reg_ww),
-                                "Voornaam": reg_voornaam,
+                                "Voornaam": reg_voornaam.strip(),
                                 "Niveau": reg_niveau,
                                 "Cluster": reg_cluster,
                                 "Goedgekeurd": "Nee",
                                 "Nummer": "999"
-                            }
-                            bewaar_alle_gebruikers(gebruikers)
+                            })
                             st.success("✅ Account succesvol aangemaakt! Wacht op goedkeuring van de docent.")
                                 
     with tab_gast:
@@ -232,7 +228,7 @@ elif not st.session_state.get("ingelogd"):
                 if not gast_voornaam.strip():
                     st.error("Vul je voornaam in.")
                 else:
-                    st.session_state["login_pogingen_leerling"] = 0 
+                    reset_login_pogingen("leerling")
                     st.session_state.ingelogd = True
                     st.session_state.rol = "leerling"
                     st.session_state.is_gast = True

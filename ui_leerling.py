@@ -4,24 +4,28 @@ import pandas as pd
 import re
 import time
 from config import HOOFDSTUKKEN, supabase
-from auth import controleer_wachtwoord, hash_wachtwoord, is_sterk_wachtwoord, laad_gebruikers, bewaar_alle_gebruikers
-from bestanden import get_leerjaar, haal_bestanden_op, lees_docx, haal_alle_resultaten_op, sla_resultaat_op, les_id, les_resultaat_mask
+from auth import controleer_wachtwoord, hash_wachtwoord, is_sterk_wachtwoord, haal_gebruiker, update_account_velden
+from bestanden import get_leerjaar, haal_bestanden_op, lees_docx, haal_resultaten_leerling, sla_resultaat_op, les_id, les_resultaat_mask, markeer_reactie_gelezen
 from ai_docent import genereer_toets_gecached, kijk_toets_na
+from storingen import haal_storingen, maak_storing
 
 def toon_leerling_paneel():
     st.title("🗺️ Huiswerkcontrole AK")
     
-    # 1. Haal uitsluitend uit Supabase de geschiedenis van deze leerling
-    st.session_state.mijn_data_geschiedenis = haal_alle_resultaten_op()
+    # Haal alleen data van de ingelogde leerling op. Gastresultaten worden niet opgeslagen.
     is_gast = st.session_state.get("is_gast", False)
+    if is_gast:
+        df_mijn = pd.DataFrame()
+    else:
+        df_mijn = haal_resultaten_leerling(st.session_state.gebruikersnaam)
+    st.session_state.mijn_data_geschiedenis = df_mijn
 
-    if not st.session_state.mijn_data_geschiedenis.empty:
-        df_mijn = st.session_state.mijn_data_geschiedenis[st.session_state.mijn_data_geschiedenis["Gebruikersnaam"] == st.session_state.gebruikersnaam]
+    if not df_mijn.empty:
         if not df_mijn.empty and "ReactieGelezen" in df_mijn.columns:
             if any((df_mijn["ReactieGelezen"] == "False") | (df_mijn["ReactieGelezen"] == False)):
                 st.error("🚨 **Nieuw bericht!** Je docent heeft feedback achtergelaten. Kijk in het tabblad 'Mijn Resultaten'.")
 
-    tab_oefen, tab_geschiedenis, tab_instellingen = st.tabs(["🗺️ Oefenen", "📊 Mijn Resultaten", "⚙️ Instellingen"])
+    tab_oefen, tab_geschiedenis, tab_storingen, tab_instellingen = st.tabs(["🗺️ Oefenen", "📊 Mijn Resultaten", "🛠️ Storingen", "⚙️ Instellingen"])
     
     with tab_oefen:
         # Anti-cheating block
@@ -66,11 +70,10 @@ def toon_leerling_paneel():
 
                 if gekozen_les != "-- Kies een paragraaf --":
                     gekozen_les_id = les_id(lj, kies_hst, gekozen_les)
-                    # Controleer of de leerling aan zijn max zit via Supabase
-                    df_all = haal_alle_resultaten_op()
+                    # Gebruik de al opgehaalde resultaten van alleen deze leerling.
                     aantal_pogingen = 0
-                    if not df_all.empty and not is_gast:
-                        df_leerling = df_all[(df_all["Gebruikersnaam"] == st.session_state.gebruikersnaam) & (df_all["Cluster"] == st.session_state.cluster)]
+                    if not df_mijn.empty and not is_gast:
+                        df_leerling = df_mijn[df_mijn["Cluster"] == st.session_state.cluster]
                         df_les = df_leerling[les_resultaat_mask(df_leerling["Les"], lj, kies_hst, gekozen_les)]
                         aantal_pogingen = len(df_les)
                     
@@ -143,18 +146,21 @@ def toon_leerling_paneel():
                                                 
                                                 boek_dicht_status = "Ja" if "Ja" in boek_dicht_keuze else "Nee"
                                                 
-                                                # Resultaat wegschrijven
-                                                success, err_msg = sla_resultaat_op(
-                                                    st.session_state.niveau, 
-                                                    st.session_state.cluster, 
-                                                    st.session_state.get("nummer", "999"), 
-                                                    st.session_state.voornaam,
-                                                    st.session_state.gebruikersnaam, 
-                                                    gekozen_les_id,
-                                                    totaal_score, 
-                                                    volledige_feedback, 
-                                                    boek_dicht_status
-                                                )
+                                                # Gastresultaten blijven uitsluitend in de sessie; zo vervuilt de database niet.
+                                                if is_gast:
+                                                    success, err_msg = True, ""
+                                                else:
+                                                    success, err_msg = sla_resultaat_op(
+                                                        st.session_state.niveau,
+                                                        st.session_state.cluster,
+                                                        st.session_state.get("nummer", "999"),
+                                                        st.session_state.voornaam,
+                                                        st.session_state.gebruikersnaam,
+                                                        gekozen_les_id,
+                                                        totaal_score,
+                                                        volledige_feedback,
+                                                        boek_dicht_status
+                                                    )
                                                 
                                                 if success:
                                                     st.session_state.toets_ingeleverd = True
@@ -170,7 +176,7 @@ def toon_leerling_paneel():
 
                             # Feedback overzicht tonen
                             if st.session_state.get("nakijk_resultaat"):
-                                st.success("✅ Toets succesvol ingeleverd in Supabase!")
+                                st.success("✅ Toets succesvol nagekeken!" if is_gast else "✅ Toets succesvol ingeleverd!")
                                 if st.session_state.huidig_cijfer >= 6.0: st.balloons()
                                 
                                 st.markdown(f"### Eindcijfer: {st.session_state.huidig_cijfer:.1f} / 10.0")
@@ -178,7 +184,23 @@ def toon_leerling_paneel():
                                 
                                 st.markdown("### 📝 Specificatie per vraag")
                                 st.markdown(st.session_state.nakijk_resultaat)
-                                
+
+                                # Gastresultaten worden niet opgeslagen. De leerling stuurt daarom
+                                # zelf een schermafbeelding van het resultaat naar de docent.
+                                if is_gast:
+                                    st.warning(
+                                        "📧 **Gastmodus: stuur je resultaat naar je docent.**\n\n"
+                                        "Je resultaat wordt in de gastmodus niet in de database opgeslagen. "
+                                        "Maak daarom een schermafbeelding waarop **je eindcijfer en de specificatie per vraag** zichtbaar zijn "
+                                        "en mail die als bijlage naar je docent.\n\n"
+                                        "**Windows:** druk op **Windows + Shift + S**, selecteer het gedeelte met je resultaat en sla de afbeelding op. "
+                                        "[Bekijk de officiële Microsoft-instructie voor een schermafbeelding](https://support.microsoft.com/nl-nl/windows/apps/use-snipping-tool-to-capture-screenshots)."
+                                    )
+                                    st.info(
+                                        f"Zet in je e-mail bij voorkeur je naam, klas **{st.session_state.cluster}** "
+                                        f"en de les **{gekozen_les_id}**. Voeg daarna de schermafbeelding als bijlage toe."
+                                    )
+
                                 if st.session_state.huidig_cijfer < 5.5:
                                     leer_link = "https://aivoorleerlingen.nl/vwo/leren" if st.session_state.niveau == "VWO" else "https://aivoorleerlingen.nl/havo/aardrijkskunde/leren"
                                     st.warning(f"Het is nog geen voldoende. Bestudeer de theorie beter en kijk voor leertips op: [Leertips Aardrijkskunde]({leer_link})")
@@ -197,10 +219,9 @@ def toon_leerling_paneel():
         if is_gast:
             st.info("💡 Resultaten uit gast-sessies worden hier niet weergegeven.")
         else:
-            df_hist = haal_alle_resultaten_op()
+            df_hist = df_mijn
             if not df_hist.empty:
-                df_mijn = df_hist[df_hist["Gebruikersnaam"] == str(st.session_state.gebruikersnaam)]
-                if not df_mijn.empty:
+                if not df_hist.empty:
                     for index, row in df_mijn.iterrows():
                         is_ongelezen = (str(row.get("ReactieGelezen", "True")) == "False")
                         heeft_reactie = pd.notna(row.get("DocentReactie")) and str(row.get("DocentReactie")).strip() != ""
@@ -223,6 +244,79 @@ def toon_leerling_paneel():
                 else:
                     st.info("Je hebt nog geen overhoringen ingeleverd.")
 
+    with tab_storingen:
+        st.subheader("🛠️ Storingen melden")
+        st.info(
+            "Bekijk eerst of jouw storing al is gemeld. Zo voorkomen we dat dezelfde fout meerdere keren wordt doorgegeven."
+        )
+
+        try:
+            df_storingen = haal_storingen()
+        except Exception as e:
+            st.error(f"Storingen ophalen mislukt: {e}")
+            df_storingen = pd.DataFrame()
+
+        if df_storingen.empty:
+            st.success("Er zijn op dit moment geen gemelde storingen.")
+        else:
+            open_df = df_storingen[df_storingen["Status"] == "in behandeling"]
+            opgelost_df = df_storingen[df_storingen["Status"] == "opgelost"]
+
+            st.markdown(f"**In behandeling: {len(open_df)}**  •  **Opgelost: {len(opgelost_df)}**")
+            for _, storing in df_storingen.head(25).iterrows():
+                status = str(storing.get("Status", "in behandeling"))
+                icoon = "🟠" if status == "in behandeling" else "✅"
+                titel = str(storing.get("Titel", "Storing"))
+                categorie = str(storing.get("Categorie", "Overig"))
+                with st.expander(f"{icoon} {titel} — {status}"):
+                    st.caption(f"Categorie: {categorie} | Gemeld: {storing.get('Aangemaakt', '')}")
+                    st.write(str(storing.get("Omschrijving", "")))
+                    admin_notitie = storing.get("AdminNotitie", "")
+                    if pd.notna(admin_notitie) and str(admin_notitie).strip():
+                        st.info(f"**Reactie beheerder:** {admin_notitie}")
+
+        st.divider()
+        st.markdown("### Nieuwe storing melden")
+        st.caption("De melding wordt direct zichtbaar voor andere leerlingen met de status 'in behandeling'. Je naam en bijlage zijn alleen voor de beheerder zichtbaar.")
+
+        with st.form("storing_melden_form", clear_on_submit=True):
+            categorie = st.selectbox(
+                "Waar gaat de storing over?",
+                ["Inloggen/account", "Toets genereren", "Nakijken/resultaat", "Lesmateriaal", "Weergave/bediening", "Overig"],
+            )
+            titel = st.text_input("Korte titel", max_chars=160, placeholder="Bijv. Toets blijft laden bij inleveren")
+            omschrijving = st.text_area(
+                "Wat gaat er mis?",
+                max_chars=4000,
+                placeholder="Beschrijf wat je deed, wat je verwachtte en welke foutmelding je zag.",
+            )
+            bijlage = st.file_uploader(
+                "Bijlage met foutmelding (optioneel)",
+                type=["png", "jpg", "jpeg", "webp", "pdf"],
+                help="Maximaal 8 MB. Bij voorkeur een screenshot van de foutmelding.",
+            )
+            gecontroleerd = st.checkbox("Ik heb hierboven gecontroleerd of deze storing al gemeld is.")
+            submit_storing = st.form_submit_button("Storing melden", type="primary")
+
+        if submit_storing:
+            if not gecontroleerd:
+                st.error("Controleer eerst of dezelfde storing al gemeld is.")
+            else:
+                try:
+                    maak_storing(
+                        titel=titel,
+                        omschrijving=omschrijving,
+                        categorie=categorie,
+                        voornaam=st.session_state.get("voornaam", ""),
+                        gebruikersnaam=st.session_state.get("gebruikersnaam", ""),
+                        cluster=st.session_state.get("cluster", ""),
+                        uploaded_file=bijlage,
+                    )
+                    st.success("✅ Storing gemeld. De status is nu 'in behandeling'.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Storing melden mislukt: {e}")
+
     with tab_instellingen:
         if is_gast:
             st.warning("Gasten hebben geen instellingen.")
@@ -234,22 +328,24 @@ def toon_leerling_paneel():
                 nieuw_ww2 = st.text_input("Herhaal nieuw:", type="password")
                 
                 if st.form_submit_button("Wijzig Wachtwoord"):
-                    gebruikers = laad_gebruikers()
                     oude_gn = st.session_state.gebruikersnaam
-                    if oude_gn not in gebruikers:
+                    gebruiker = haal_gebruiker(oude_gn)
+                    if not gebruiker:
                         st.error("Je account is niet meer beschikbaar. Log opnieuw in.")
-                    elif not controleer_wachtwoord(oud_ww, gebruikers[oude_gn]["WachtwoordHash"]):
+                    elif not controleer_wachtwoord(oud_ww, gebruiker.get("WachtwoordHash")):
                         st.error("Oud wachtwoord onjuist.")
-                    elif nieuw_ww != nieuw_ww2: 
+                    elif nieuw_ww != nieuw_ww2:
                         st.error("Wachtwoorden komen niet overeen.")
                     else:
                         is_sterk, fout = is_sterk_wachtwoord(nieuw_ww)
-                        if not is_sterk: 
+                        if not is_sterk:
                             st.error(fout)
                         else:
-                            gebruikers[oude_gn]["WachtwoordHash"] = hash_wachtwoord(nieuw_ww)
                             try:
-                                bewaar_alle_gebruikers(gebruikers)
+                                update_account_velden(
+                                    "gebruikers", "Gebruikersnaam", oude_gn,
+                                    {"WachtwoordHash": hash_wachtwoord(nieuw_ww)}
+                                )
                                 st.success("✅ Wachtwoord succesvol gewijzigd!")
                             except Exception as e:
                                 st.error(f"Fout bij wijzigen wachtwoord: {e}")

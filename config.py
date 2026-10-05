@@ -5,8 +5,8 @@ import requests
 import datetime
 
 # --- 1. VERSIEBEHEER & PAGINA ---
-LAATSTE_UPDATE = "24 september 2026"
-VERSIE = "3.0.12"
+LAATSTE_UPDATE = "5 oktober 2026"
+VERSIE = "3.1.0"
 
 def setup_page():
     st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")

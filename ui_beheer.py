@@ -2,9 +2,11 @@ import streamlit as st
 import pandas as pd
 import re
 import time
+from pathlib import PurePath
 from config import supabase, HOOFDSTUKKEN, ALLE_CLUSTERS, NIVEAUS, LEERJAREN_CLUSTERS
 from auth import laad_gebruikers, bewaar_alle_gebruikers, laad_docenten, bewaar_alle_docenten, hash_wachtwoord, is_sterk_wachtwoord, verwijder_account
-from bestanden import haal_alle_resultaten_op, haal_bestanden_op, les_resultaat_mask
+from bestanden import haal_resultaten_klas, haal_bestanden_op, les_resultaat_mask, sla_docentreactie_op
+from storingen import haal_storingen, download_bijlage, werk_storing_bij
 
 # Helper functie om leerjaar te bepalen
 def get_leerjaar(cluster_naam):
@@ -34,7 +36,7 @@ def toon_docent_paneel():
         
         if leerlingen_in_klas:
             gekozen_leerling_gn = st.selectbox("Kies leerling:", list(leerlingen_in_klas.keys()), format_func=lambda x: leerlingen_in_klas[x], key="res_leerling_select")
-            df_docent = haal_alle_resultaten_op()
+            df_docent = haal_resultaten_klas(docent_klas)
             if not df_docent.empty and "Gebruikersnaam" in df_docent.columns:
                 mijn_data = df_docent[(df_docent["Gebruikersnaam"] == gekozen_leerling_gn) & (df_docent["Cluster"] == docent_klas)].copy()
                 if not mijn_data.empty:
@@ -73,7 +75,7 @@ def toon_docent_paneel():
                 check_les = st.selectbox("Kies de les:", beschikbare_bestanden, key="check_les_select")
                 if st.button("Check status", type="primary"):
                     gemaakt_gn = set()
-                    df_check = haal_alle_resultaten_op()
+                    df_check = haal_resultaten_klas(docent_klas)
                     if not df_check.empty and "Gebruikersnaam" in df_check.columns and "Les" in df_check.columns:
                         klas_resultaten = df_check[df_check["Cluster"] == docent_klas]
                         gelukt = klas_resultaten[les_resultaat_mask(klas_resultaten["Les"], lj, check_hst, check_les)]
@@ -134,7 +136,11 @@ def toon_docent_paneel():
             if st.button("Opslaan & Uploaden", type="primary"):
                 success_count = 0
                 for uploaded_file in uploaded_files:
-                    pad = f"{up_leerjaar}/{up_hst}/{uploaded_file.name}"
+                    veilige_naam = PurePath(uploaded_file.name).name
+                    if not veilige_naam.lower().endswith(".docx"):
+                        st.error(f"Ongeldig bestandstype: {uploaded_file.name}")
+                        continue
+                    pad = f"{up_leerjaar}/{up_hst}/{veilige_naam}"
                     try:
                         # Upload uitsluitend naar Supabase Storage (geen lokale opslag meer)
                         supabase.storage.from_("lesmateriaal").upload(
@@ -215,7 +221,7 @@ def toon_docent_paneel():
 
 def toon_admin_paneel():
     st.title("⚙️ Beheerderspaneel")
-    admin_tab_1, admin_tab_2, admin_tab_3 = st.tabs(["Nieuwe Aanvragen", "Beheer Leerlingen", "Beheer Docenten"])
+    admin_tab_1, admin_tab_2, admin_tab_3, admin_tab_4 = st.tabs(["Nieuwe Aanvragen", "Beheer Leerlingen", "Beheer Docenten", "🛠️ Storingen"])
     
     with admin_tab_1:
         st.write("**Aanvragen Docentenaccounts**")
@@ -425,8 +431,12 @@ def toon_admin_paneel():
                         changed = True
                         
                     if nieuw_doc_ww:
-                        docs[kies_admin_doc]["WachtwoordHash"] = hash_wachtwoord(nieuw_doc_ww)
-                        changed = True
+                        is_sterk, fout = is_sterk_wachtwoord(nieuw_doc_ww)
+                        if not is_sterk:
+                            st.error(fout)
+                        else:
+                            docs[kies_admin_doc]["WachtwoordHash"] = hash_wachtwoord(nieuw_doc_ww)
+                            changed = True
                         
                     if changed:
                         bewaar_alle_docenten(docs)
@@ -437,3 +447,79 @@ def toon_admin_paneel():
                         st.info("Geen wijzigingen gedetecteerd.")
         else:
             st.info("Er zijn geen goedgekeurde docenten.")
+    with admin_tab_4:
+        st.subheader("🛠️ Storingenbeheer")
+        try:
+            df_storingen = haal_storingen()
+        except Exception as e:
+            st.error(f"Storingen ophalen mislukt: {e}")
+            df_storingen = pd.DataFrame()
+
+        if df_storingen.empty:
+            st.info("Er zijn nog geen storingen gemeld.")
+        else:
+            aantal_open = int((df_storingen["Status"] == "in behandeling").sum())
+            aantal_opgelost = int((df_storingen["Status"] == "opgelost").sum())
+            st.markdown(f"**In behandeling: {aantal_open}**  •  **Opgelost: {aantal_opgelost}**")
+
+            filter_status = st.selectbox(
+                "Toon",
+                ["in behandeling", "opgelost", "alles"],
+                key="admin_storing_filter",
+            )
+            zichtbaar = df_storingen if filter_status == "alles" else df_storingen[df_storingen["Status"] == filter_status]
+
+            for _, storing in zichtbaar.iterrows():
+                storing_id = str(storing.get("StoringID", ""))
+                status = str(storing.get("Status", "in behandeling"))
+                icoon = "🟠" if status == "in behandeling" else "✅"
+                titel = str(storing.get("Titel", "Storing"))
+
+                with st.expander(f"{icoon} {titel} — {status}"):
+                    st.write(f"**Categorie:** {storing.get('Categorie', 'Overig')}")
+                    st.write(f"**Gemeld:** {storing.get('Aangemaakt', '')}")
+                    st.write(f"**Leerling:** {storing.get('Voornaam', '-')} | **Klas:** {storing.get('Cluster', '-')}")
+                    st.caption(f"Account: {storing.get('Gebruikersnaam', '-')}")
+                    st.write("**Omschrijving:**")
+                    st.write(str(storing.get("Omschrijving", "")))
+
+                    bijlage_pad = storing.get("BijlagePad")
+                    if pd.notna(bijlage_pad) and str(bijlage_pad).strip():
+                        try:
+                            inhoud = download_bijlage(str(bijlage_pad))
+                            bestandsnaam = PurePath(str(bijlage_pad)).name
+                            st.download_button(
+                                "📎 Download bijlage",
+                                data=inhoud,
+                                file_name=bestandsnaam,
+                                key=f"storing_bijlage_{storing_id}",
+                            )
+                        except Exception as e:
+                            st.warning(f"Bijlage kon niet worden geladen: {e}")
+
+                    huidige_notitie = storing.get("AdminNotitie", "")
+                    if pd.isna(huidige_notitie):
+                        huidige_notitie = ""
+                    with st.form(f"storing_form_{storing_id}"):
+                        nieuwe_status = st.selectbox(
+                            "Status",
+                            ["in behandeling", "opgelost"],
+                            index=0 if status == "in behandeling" else 1,
+                            key=f"storing_status_{storing_id}",
+                        )
+                        admin_notitie = st.text_area(
+                            "Reactie / oplossing voor leerlingen",
+                            value=str(huidige_notitie),
+                            max_chars=4000,
+                            key=f"storing_notitie_{storing_id}",
+                        )
+                        opslaan = st.form_submit_button("Wijziging opslaan", type="primary")
+
+                    if opslaan:
+                        try:
+                            werk_storing_bij(storing_id, nieuwe_status, admin_notitie)
+                            st.success("Storing bijgewerkt.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Bijwerken mislukt: {e}")
+
