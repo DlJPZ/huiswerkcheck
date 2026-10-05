@@ -1,5 +1,5 @@
 -- Eenmalig uitvoeren in Supabase -> SQL Editor.
--- De app gebruikt een sb_secret_ key op de Streamlit-server; daarom zijn geen publieke RLS-policies nodig.
+-- De app gebruikt een sb_secret_ key op de Streamlit-server; publieke policies zijn niet nodig.
 
 create table if not exists public.storingen (
     "StoringID" text primary key,
@@ -14,13 +14,50 @@ create table if not exists public.storingen (
     "Cluster" text,
     "BijlagePad" text,
     "AdminNotitie" text not null default '',
-    "OpgelostOp" timestamptz
+    "OpgelostOp" timestamptz,
+    "MeldingenAantal" integer not null default 1
 );
 
+alter table public.storingen add column if not exists "MeldingenAantal" integer not null default 1;
 alter table public.storingen enable row level security;
 
 create index if not exists storingen_status_aangemaakt_idx
     on public.storingen ("Status", "Aangemaakt" desc);
+
+create table if not exists public.storing_bevestigingen (
+    "StoringID" text not null references public.storingen("StoringID") on delete cascade,
+    "MelderKey" text not null,
+    "Aangemaakt" timestamptz not null default now(),
+    primary key ("StoringID", "MelderKey")
+);
+alter table public.storing_bevestigingen enable row level security;
+
+create or replace function public.update_storing_meldingen_aantal()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    if tg_op = 'INSERT' then
+        update public.storingen
+        set "MeldingenAantal" = "MeldingenAantal" + 1
+        where "StoringID" = new."StoringID";
+        return new;
+    elsif tg_op = 'DELETE' then
+        update public.storingen
+        set "MeldingenAantal" = greatest(1, "MeldingenAantal" - 1)
+        where "StoringID" = old."StoringID";
+        return old;
+    end if;
+    return null;
+end;
+$$;
+
+drop trigger if exists storing_bevestiging_teller on public.storing_bevestigingen;
+create trigger storing_bevestiging_teller
+after insert or delete on public.storing_bevestigingen
+for each row execute function public.update_storing_meldingen_aantal();
 
 -- Privé bucket: alleen de server-side secret key kan de bijlagen benaderen.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

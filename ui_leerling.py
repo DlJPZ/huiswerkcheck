@@ -7,7 +7,7 @@ from config import HOOFDSTUKKEN, supabase
 from auth import controleer_wachtwoord, hash_wachtwoord, is_sterk_wachtwoord, haal_gebruiker, update_account_velden
 from bestanden import get_leerjaar, haal_bestanden_op, lees_docx, haal_resultaten_leerling, sla_resultaat_op, les_id, les_resultaat_mask, markeer_reactie_gelezen
 from ai_docent import genereer_toets_gecached, kijk_toets_na
-from storingen import haal_storingen, maak_storing
+from storingen import haal_storingen, maak_storing, bevestig_storing
 
 def toon_leerling_paneel():
     st.title("🗺️ Huiswerkcontrole AK")
@@ -20,10 +20,9 @@ def toon_leerling_paneel():
         df_mijn = haal_resultaten_leerling(st.session_state.gebruikersnaam)
     st.session_state.mijn_data_geschiedenis = df_mijn
 
-    if not df_mijn.empty:
-        if not df_mijn.empty and "ReactieGelezen" in df_mijn.columns:
-            if any((df_mijn["ReactieGelezen"] == "False") | (df_mijn["ReactieGelezen"] == False)):
-                st.error("🚨 **Nieuw bericht!** Je docent heeft feedback achtergelaten. Kijk in het tabblad 'Mijn Resultaten'.")
+    if not df_mijn.empty and "ReactieGelezen" in df_mijn.columns:
+        if any((df_mijn["ReactieGelezen"] == "False") | (df_mijn["ReactieGelezen"] == False)):
+            st.error("🚨 **Nieuw bericht!** Je docent heeft feedback achtergelaten. Kijk in het tabblad 'Mijn Resultaten'.")
 
     tab_oefen, tab_geschiedenis, tab_storingen, tab_instellingen = st.tabs(["🗺️ Oefenen", "📊 Mijn Resultaten", "🛠️ Storingen", "⚙️ Instellingen"])
     
@@ -111,7 +110,7 @@ def toon_leerling_paneel():
                                         else:
                                             st.error("Ongeldig toetsformaat ontvangen. Herlaad de pagina.")
                                     except Exception as e:
-                                        st.error(f"🚨 Fout bij genereren toets: {e}")
+                                        st.error("🚨 De toets kon niet worden gegenereerd. Probeer het opnieuw.")
 
                             # Fase 2: De Leerling Interface
                             if st.session_state.get("vragen_data") and not st.session_state.get("nakijk_resultaat"):
@@ -169,10 +168,10 @@ def toon_leerling_paneel():
                                                     st.session_state.docenten_feedback = ai_docent_tekst
                                                     st.rerun()
                                                 else:
-                                                    st.error(f"🚨 De database weigerde het resultaat op te slaan. Je antwoorden zijn nog bewaard in de invulvelden hierboven. Druk zo nogmaals op inleveren. (Fout: {err_msg})")
+                                                    st.error("🚨 Het resultaat kon niet worden opgeslagen. Je antwoorden zijn nog bewaard in de invulvelden hierboven. Probeer zo opnieuw in te leveren.")
                                                     
                                             except Exception as e:
-                                                st.error(f"🚨 Verbinding met nakijk-model haperde: {e}")
+                                                st.error("🚨 Het nakijken is tijdelijk mislukt. Je antwoorden blijven staan; probeer zo opnieuw.")
 
                             # Feedback overzicht tonen
                             if st.session_state.get("nakijk_resultaat"):
@@ -221,8 +220,7 @@ def toon_leerling_paneel():
         else:
             df_hist = df_mijn
             if not df_hist.empty:
-                if not df_hist.empty:
-                    for index, row in df_mijn.iterrows():
+                for index, row in df_hist.iterrows():
                         is_ongelezen = (str(row.get("ReactieGelezen", "True")) == "False")
                         heeft_reactie = pd.notna(row.get("DocentReactie")) and str(row.get("DocentReactie")).strip() != ""
                         titel_prefix = "🚨 " if is_ongelezen else "💬 " if heeft_reactie else "📄 "
@@ -235,10 +233,12 @@ def toon_leerling_paneel():
                                 if is_ongelezen:
                                     if st.button("Markeer als gelezen", key=f"gelezen_{row['PogingID']}"):
                                         try:
-                                            supabase.table("resultaten").update({"ReactieGelezen": "True"}).eq("PogingID", row["PogingID"]).execute()
-                                            st.rerun()
+                                            if markeer_reactie_gelezen(row["PogingID"], st.session_state.gebruikersnaam):
+                                                st.rerun()
+                                            else:
+                                                st.error("De reactie kon niet als gelezen worden gemarkeerd.")
                                         except Exception as e:
-                                            st.error(f"Markeren als gelezen mislukt: {e}")
+                                            st.error("Markeren als gelezen is mislukt. Probeer het later opnieuw.")
                             else:
                                 st.write("*De docent heeft nog geen extra reactie achtergelaten.*")
                 else:
@@ -253,7 +253,7 @@ def toon_leerling_paneel():
         try:
             df_storingen = haal_storingen()
         except Exception as e:
-            st.error(f"Storingen ophalen mislukt: {e}")
+            st.error("Storingen konden niet worden opgehaald. Probeer het later opnieuw.")
             df_storingen = pd.DataFrame()
 
         if df_storingen.empty:
@@ -269,8 +269,23 @@ def toon_leerling_paneel():
                 titel = str(storing.get("Titel", "Storing"))
                 categorie = str(storing.get("Categorie", "Overig"))
                 with st.expander(f"{icoon} {titel} — {status}"):
-                    st.caption(f"Categorie: {categorie} | Gemeld: {storing.get('Aangemaakt', '')}")
+                    aantal_meldingen = int(storing.get("MeldingenAantal", 1) or 1)
+                    st.caption(f"Categorie: {categorie} | Gemeld: {storing.get('Aangemaakt', '')} | {aantal_meldingen} leerling(en) ervaren dit")
                     st.write(str(storing.get("Omschrijving", "")))
+                    if status == "in behandeling":
+                        if st.button("Ik heb dit probleem ook", key=f"bevestig_storing_{storing.get('StoringID')}"):
+                            try:
+                                nieuw = bevestig_storing(
+                                    storing.get("StoringID"),
+                                    st.session_state.get("gebruikersnaam", "anoniem"),
+                                )
+                                if nieuw:
+                                    st.success("Dank je. Je bevestiging is toegevoegd.")
+                                    st.rerun()
+                                else:
+                                    st.info("Je had deze storing al bevestigd.")
+                            except Exception:
+                                st.error("Je bevestiging kon niet worden opgeslagen. Probeer het later opnieuw.")
                     admin_notitie = storing.get("AdminNotitie", "")
                     if pd.notna(admin_notitie) and str(admin_notitie).strip():
                         st.info(f"**Reactie beheerder:** {admin_notitie}")
@@ -315,7 +330,7 @@ def toon_leerling_paneel():
                     st.success("✅ Storing gemeld. De status is nu 'in behandeling'.")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Storing melden mislukt: {e}")
+                    st.error("De storing kon niet worden gemeld. Controleer de invoer en probeer opnieuw.")
 
     with tab_instellingen:
         if is_gast:
@@ -348,7 +363,7 @@ def toon_leerling_paneel():
                                 )
                                 st.success("✅ Wachtwoord succesvol gewijzigd!")
                             except Exception as e:
-                                st.error(f"Fout bij wijzigen wachtwoord: {e}")
+                                st.error("Het wachtwoord kon niet worden gewijzigd. Probeer het later opnieuw.")
 
 def toon_mini_game():
     st.divider()

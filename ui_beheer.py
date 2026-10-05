@@ -52,10 +52,12 @@ def toon_docent_paneel():
                             
                             if st.button("Opslaan", key=f"btn_{row['PogingID']}"):
                                 try:
-                                    supabase.table("resultaten").update({"DocentReactie": nieuwe_reactie, "ReactieGelezen": "False"}).eq("PogingID", row["PogingID"]).execute()
-                                    st.success("Reactie opgeslagen!")
+                                    if sla_docentreactie_op(row["PogingID"], gekozen_leerling_gn, docent_klas, nieuwe_reactie):
+                                        st.success("Reactie opgeslagen!")
+                                    else:
+                                        st.error("De reactie kon niet worden opgeslagen.")
                                 except Exception as e:
-                                    st.error(f"Fout in cloud update: {e}")
+                                    st.error("De reactie kon niet worden opgeslagen.")
                 else:
                     st.info("Deze leerling heeft nog niets ingeleverd.")
             else:
@@ -121,7 +123,7 @@ def toon_docent_paneel():
                             time.sleep(1)
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Fout bij verwijderen: {e}")
+                            st.error("Het bestand kon niet worden verwijderd.")
         else:
             st.info("Nog geen lesmateriaal geüpload in deze map.")
             
@@ -150,7 +152,7 @@ def toon_docent_paneel():
                         )
                         success_count += 1
                     except Exception as e:
-                        st.error(f"Cloud upload mislukt voor {uploaded_file.name}: {e}")
+                        st.error(f"Upload mislukt voor {uploaded_file.name}.")
                         
                 if success_count > 0:
                     st.success(f"✅ {success_count} bestand(en) succesvol geüpload naar {up_leerjaar}/{up_hst}!")
@@ -378,7 +380,7 @@ def toon_admin_paneel():
             
             nieuw_vn = st.text_input("Voornaam leerling:")
             nieuw_gn = st.text_input("Kies gebruikersnaam:")
-            nieuw_ww = st.text_input("Kies wachtwoord (Min 8 tekens, 1 cijfer, 1 speciaal teken):", type="password")
+            nieuw_ww = st.text_input("Kies wachtwoord (Min 10 tekens, 1 cijfer, 1 speciaal teken):", type="password")
             
             if st.form_submit_button("Voeg leerling toe"):
                 if nieuw_gn in alle_gebruikers:
@@ -405,7 +407,7 @@ def toon_admin_paneel():
                             time.sleep(1)
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Fout bij opslaan: {e}")
+                            st.error("Opslaan is mislukt. Probeer het opnieuw.")
 
     with admin_tab_3:
         st.write("**Overzicht Docenten**")
@@ -452,7 +454,7 @@ def toon_admin_paneel():
         try:
             df_storingen = haal_storingen()
         except Exception as e:
-            st.error(f"Storingen ophalen mislukt: {e}")
+            st.error("Storingen konden niet worden opgehaald. Probeer het later opnieuw.")
             df_storingen = pd.DataFrame()
 
         if df_storingen.empty:
@@ -478,6 +480,7 @@ def toon_admin_paneel():
                 with st.expander(f"{icoon} {titel} — {status}"):
                     st.write(f"**Categorie:** {storing.get('Categorie', 'Overig')}")
                     st.write(f"**Gemeld:** {storing.get('Aangemaakt', '')}")
+                    st.write(f"**Aantal meldingen:** {int(storing.get('MeldingenAantal', 1) or 1)}")
                     st.write(f"**Leerling:** {storing.get('Voornaam', '-')} | **Klas:** {storing.get('Cluster', '-')}")
                     st.caption(f"Account: {storing.get('Gebruikersnaam', '-')}")
                     st.write("**Omschrijving:**")
@@ -495,7 +498,7 @@ def toon_admin_paneel():
                                 key=f"storing_bijlage_{storing_id}",
                             )
                         except Exception as e:
-                            st.warning(f"Bijlage kon niet worden geladen: {e}")
+                            st.warning("De bijlage kon niet worden geladen.")
 
                     huidige_notitie = storing.get("AdminNotitie", "")
                     if pd.isna(huidige_notitie):
@@ -521,5 +524,5 @@ def toon_admin_paneel():
                             st.success("Storing bijgewerkt.")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Bijwerken mislukt: {e}")
+                            st.error("De storing kon niet worden bijgewerkt.")
 

@@ -1,7 +1,6 @@
 import streamlit as st
 import hmac
 import uuid
-import requests
 
 # 1. Pagina Setup (Dit MOET het eerste Streamlit commando zijn)
 from config import setup_page
@@ -12,10 +11,12 @@ from config import pas_styling_toe, LAATSTE_UPDATE, VERSIE, ALLE_CLUSTERS, NIVEA
 from auth import (
     check_lockout, registreer_fout_inlog, reset_login_pogingen, controleer_wachtwoord,
     haal_gebruiker, haal_docent, account_bestaat, maak_account,
-    hash_wachtwoord, is_sterk_wachtwoord
+    hash_wachtwoord, is_sterk_wachtwoord, check_server_lockout,
+    registreer_server_fout_inlog, reset_server_login_pogingen
 )
 from ui_beheer import toon_docent_paneel, toon_admin_paneel
 from ui_leerling import toon_leerling_paneel, toon_mini_game
+from storingen import maak_storing
 
 # Pas dynamische achtergrond styling toe
 pas_styling_toe()
@@ -45,29 +46,44 @@ elif not st.session_state.get("ingelogd"):
                 submitted_docent = st.form_submit_button("Log in als docent")
                 
                 if submitted_docent:
+                    docent_id = d_login.strip()
+                    if check_server_lockout("docent", docent_id):
+                        st.stop()
+
+                    admin_hash = str(st.secrets.get("ADMIN_WACHTWOORD_HASH", "")).strip()
                     admin_ww = str(st.secrets.get("ADMIN_WACHTWOORD", "")).strip()
-                    if admin_ww and d_login.strip().lower() == "admin" and hmac.compare_digest(d_ww.encode("utf-8"), admin_ww.encode("utf-8")):
+                    admin_ok = False
+                    if docent_id.lower() == "admin":
+                        if admin_hash:
+                            admin_ok = controleer_wachtwoord(d_ww, admin_hash)
+                        elif admin_ww:
+                            # Tijdelijke compatibiliteit; vervang door ADMIN_WACHTWOORD_HASH.
+                            admin_ok = hmac.compare_digest(d_ww.encode("utf-8"), admin_ww.encode("utf-8"))
+
+                    if admin_ok:
                         reset_login_pogingen("docent")
+                        reset_server_login_pogingen("docent", docent_id)
                         st.session_state.ingelogd = True
                         st.session_state.rol = "admin"
                         st.session_state.docent_naam = "Beheerder"
                         st.rerun()
+
+                    docent = None if docent_id.lower() == "admin" else haal_docent(docent_id)
+                    if not docent or not controleer_wachtwoord(d_ww, docent.get("WachtwoordHash")):
+                        registreer_fout_inlog("docent")
+                        registreer_server_fout_inlog("docent", docent_id)
+                        st.error("Onjuiste inloggegevens.")
+                    elif docent.get("Goedgekeurd") == "Ja":
+                        reset_login_pogingen("docent")
+                        reset_server_login_pogingen("docent", docent_id)
+                        st.session_state.ingelogd = True
+                        st.session_state.rol = "docent"
+                        st.session_state.docent_id = docent_id
+                        st.session_state.docent_naam = docent["Naam"]
+                        st.session_state.docent_klassen = docent["Klassen"]
+                        st.rerun()
                     else:
-                        docent_id = d_login.strip()
-                        docent = haal_docent(docent_id)
-                        if not docent or not controleer_wachtwoord(d_ww, docent.get("WachtwoordHash")):
-                            registreer_fout_inlog("docent")
-                            st.error("Onjuiste inloggegevens.")
-                        elif docent.get("Goedgekeurd") == "Ja":
-                            reset_login_pogingen("docent")
-                            st.session_state.ingelogd = True
-                            st.session_state.rol = "docent"
-                            st.session_state.docent_id = docent_id
-                            st.session_state.docent_naam = docent["Naam"]
-                            st.session_state.docent_klassen = docent["Klassen"]
-                            st.rerun()
-                        else:
-                            st.error("Je account wacht nog op goedkeuring van de beheerder.")
+                        st.error("Je account wacht nog op goedkeuring van de beheerder.")
                 
     with tab_d_reg:
         with st.form("docent_reg_form"):
@@ -136,13 +152,17 @@ elif not st.session_state.get("ingelogd"):
                 
                 if submitted_login:
                     gebruikersnaam = login_gn.strip()
+                    if check_server_lockout("leerling", gebruikersnaam):
+                        st.stop()
                     gebruiker = haal_gebruiker(gebruikersnaam)
                     if not gebruiker or not controleer_wachtwoord(login_ww, gebruiker.get("WachtwoordHash")):
                         registreer_fout_inlog("leerling")
+                        registreer_server_fout_inlog("leerling", gebruikersnaam)
                         st.error("❌ Onjuiste inloggegevens.")
                     else:
                         if gebruiker.get("Goedgekeurd", "Ja") == "Ja":
                             reset_login_pogingen("leerling")
+                            reset_server_login_pogingen("leerling", gebruikersnaam)
                             st.session_state.ingelogd = True
                             st.session_state.rol = "leerling"
                             st.session_state.is_gast = False
@@ -157,28 +177,28 @@ elif not st.session_state.get("ingelogd"):
 
         st.divider()
         with st.expander("Wachtwoord of inlognaam vergeten?"):
-            st.write("Vul hier je gegevens in om de docent te waarschuwen dat je een probleem hebt met inloggen.")
+            st.write("Meld hier het probleem. De beheerder ziet dit in het storingenoverzicht; er wordt geen externe maildienst gebruikt.")
             with st.form("ww_vergeten_form"):
                 vergeten_naam = st.text_input("Jouw voornaam:")
                 vergeten_klas = st.selectbox("Jouw klas:", ALLE_CLUSTERS)
-                
-                if st.form_submit_button("Stuur bericht naar docent", type="primary"):
-                    if not vergeten_naam.strip():
-                        st.error("Vul eerst je naam in.")
+                vergeten_uitleg = st.text_area("Wat gaat er mis?", placeholder="Bijv. ik weet mijn gebruikersnaam niet meer of mijn wachtwoord werkt niet.")
+
+                if st.form_submit_button("Meld inlogprobleem", type="primary"):
+                    if not vergeten_naam.strip() or len(vergeten_uitleg.strip()) < 10:
+                        st.error("Vul je naam en een korte omschrijving van minimaal 10 tekens in.")
                     else:
                         try:
-                            post_data = {
-                                "name": f"{vergeten_naam} ({vergeten_klas})",
-                                "message": f"Leerling {vergeten_naam} uit klas {vergeten_klas} kan niet inloggen.",
-                                "_subject": f"🚨 Wachtwoord reset aangevraagd: {vergeten_naam} ({vergeten_klas})"
-                            }
-                            response = requests.post("https://formsubmit.co/ajax/jjvddool@pieterzandt.nl", data=post_data, timeout=15)
-                            response.raise_for_status()
-                            if str(response.json().get("success")).lower() != "true":
-                                raise ValueError("De aanvraag is niet geaccepteerd.")
-                            st.success("✅ Aanvraag is verstuurd!")
-                        except Exception as e:
-                            st.error("Er ging iets mis met het versturen.")
+                            maak_storing(
+                                titel=f"Inlogprobleem - {vergeten_naam.strip()}",
+                                omschrijving=vergeten_uitleg.strip(),
+                                categorie="Inloggen/account",
+                                voornaam=vergeten_naam.strip(),
+                                gebruikersnaam="",
+                                cluster=vergeten_klas,
+                            )
+                            st.success("✅ Je melding is verstuurd naar de beheerder.")
+                        except Exception:
+                            st.error("De melding kon niet worden verstuurd. Probeer het later opnieuw.")
 
     with tab_reg:
         st.subheader("Nieuw account aanmaken")

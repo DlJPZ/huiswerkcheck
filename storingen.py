@@ -9,6 +9,7 @@ from config import supabase
 
 STORINGEN_BUCKET = "storingsbijlagen"
 MAX_BIJLAGE_BYTES = 8 * 1024 * 1024
+PAGE_SIZE = 250
 TOEGESTAAN_EXTENSIES = {".png", ".jpg", ".jpeg", ".webp", ".pdf"}
 TOEGESTANE_MIME_TYPES = {
     "image/png",
@@ -33,6 +34,18 @@ def _mime_type(uploaded_file):
     return (guessed or "application/octet-stream").lower()
 
 
+def _bestandssignatuur(inhoud):
+    if inhoud.startswith(b"%PDF-"):
+        return "application/pdf"
+    if inhoud.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if inhoud.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(inhoud) >= 12 and inhoud[:4] == b"RIFF" and inhoud[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def valideer_bijlage(uploaded_file):
     if uploaded_file is None:
         return
@@ -41,19 +54,34 @@ def valideer_bijlage(uploaded_file):
     if extensie not in TOEGESTAAN_EXTENSIES:
         raise ValueError("Bijlagen moeten PNG, JPG, WEBP of PDF zijn.")
     inhoud = uploaded_file.getvalue()
+    if not inhoud:
+        raise ValueError("De bijlage is leeg.")
     if len(inhoud) > MAX_BIJLAGE_BYTES:
         raise ValueError("De bijlage mag maximaal 8 MB groot zijn.")
     mime = _mime_type(uploaded_file)
-    if mime not in TOEGESTANE_MIME_TYPES:
-        raise ValueError("Dit bestandstype is niet toegestaan.")
+    signatuur = _bestandssignatuur(inhoud)
+    if mime not in TOEGESTANE_MIME_TYPES or signatuur not in TOEGESTANE_MIME_TYPES:
+        raise ValueError("Dit bestandstype is niet toegestaan of de bestandsinhoud klopt niet met de extensie.")
+    if mime == "image/jpeg" and signatuur == "image/jpeg":
+        return
+    if mime != signatuur:
+        raise ValueError("Het opgegeven bestandstype komt niet overeen met de werkelijke bestandsinhoud.")
 
 
 def haal_storingen(status=None):
-    query = supabase.table("storingen").select("*")
-    if status in STATUSSEN:
-        query = query.eq("Status", status)
-    data = query.order("Aangemaakt", desc=True).execute().data or []
-    return pd.DataFrame(data)
+    rijen = []
+    while True:
+        query = supabase.table("storingen").select("*")
+        if status in STATUSSEN:
+            query = query.eq("Status", status)
+        pagina = (
+            query.order("Aangemaakt", desc=True)
+            .range(len(rijen), len(rijen) + PAGE_SIZE - 1)
+            .execute()
+        ).data or []
+        if not pagina:
+            return pd.DataFrame(rijen)
+        rijen.extend(pagina)
 
 
 def maak_storing(titel, omschrijving, categorie, voornaam, gebruikersnaam, cluster, uploaded_file=None):
@@ -75,10 +103,7 @@ def maak_storing(titel, omschrijving, categorie, voornaam, gebruikersnaam, clust
         supabase.storage.from_(STORINGEN_BUCKET).upload(
             path=bijlage_pad,
             file=uploaded_file.getvalue(),
-            file_options={
-                "content-type": _mime_type(uploaded_file),
-                "upsert": "false",
-            },
+            file_options={"content-type": _bestandssignatuur(uploaded_file.getvalue()), "upsert": "false"},
         )
 
     data = {
@@ -105,8 +130,23 @@ def maak_storing(titel, omschrijving, categorie, voornaam, gebruikersnaam, clust
             except Exception:
                 pass
         raise
-
     return storing_id
+
+
+def bevestig_storing(storing_id, melder_key):
+    """Registreer maximaal één bevestiging per storing per account/sessie."""
+    payload = {
+        "StoringID": str(storing_id),
+        "MelderKey": (melder_key or "anoniem")[:180],
+    }
+    try:
+        response = supabase.table("storing_bevestigingen").insert(payload).execute()
+        return bool(response.data)
+    except Exception as exc:
+        # Unique constraint betekent meestal: deze leerling heeft al bevestigd.
+        if "duplicate" in str(exc).lower() or "unique" in str(exc).lower():
+            return False
+        raise
 
 
 def download_bijlage(pad):
@@ -121,18 +161,9 @@ def werk_storing_bij(storing_id, status, admin_notitie=""):
     wijzigingen = {
         "Status": status,
         "AdminNotitie": (admin_notitie or "")[:4000],
-        "OpgelostOp": (
-            datetime.datetime.now(datetime.timezone.utc).isoformat()
-            if status == "opgelost"
-            else None
-        ),
+        "OpgelostOp": datetime.datetime.now(datetime.timezone.utc).isoformat() if status == "opgelost" else None,
     }
-    response = (
-        supabase.table("storingen")
-        .update(wijzigingen)
-        .eq("StoringID", storing_id)
-        .execute()
-    )
+    response = supabase.table("storingen").update(wijzigingen).eq("StoringID", storing_id).execute()
     if not response.data:
         raise RuntimeError("De storing kon niet worden bijgewerkt.")
     return True

@@ -145,7 +145,7 @@ def verwijder_account(tabel, sleutel, account_id):
         if not response.data:
             raise RuntimeError("Geen account verwijderd. Vernieuw het overzicht en controleer de toegang.")
     except Exception as e:
-        st.error(f"Verwijderen mislukt: {e}")
+        st.error("Verwijderen is mislukt. Vernieuw de pagina en probeer opnieuw.")
         st.stop()
 
 
@@ -238,7 +238,7 @@ def laad_gebruikers():
             users[gebruikersnaam] = row
         return AccountOverzicht(users)
     except Exception as e:
-        st.warning(f"Cloud gebruikers ophalen mislukt: {e}")
+        st.warning("Gebruikers konden niet worden opgehaald. Probeer het later opnieuw.")
         st.stop()
 
 
@@ -246,7 +246,7 @@ def bewaar_alle_gebruikers(users_dict):
     try:
         bewaar_account_wijzigingen("gebruikers", "Gebruikersnaam", users_dict)
     except Exception as e:
-        st.error(f"🚨 Supabase-fout bij opslaan gebruikers: {e}")
+        st.error("Gebruikers konden niet worden opgeslagen. Probeer het opnieuw.")
         st.stop()
 
 
@@ -263,7 +263,7 @@ def laad_docenten():
             docs[docent_id] = row
         return AccountOverzicht(docs)
     except Exception as e:
-        st.warning(f"Cloud docenten ophalen mislukt: {e}")
+        st.warning("Docenten konden niet worden opgehaald. Probeer het later opnieuw.")
         st.stop()
 
 
@@ -271,5 +271,80 @@ def bewaar_alle_docenten(docs_dict):
     try:
         bewaar_account_wijzigingen("docenten", "DocentID", docs_dict)
     except Exception as e:
-        st.error(f"Cloud opslag fout (Docenten): {e}")
+        st.error("Docentgegevens konden niet worden opgeslagen. Probeer het opnieuw.")
         st.stop()
+
+# =========================================================
+# SERVER-SIDE LOGINBEVEILIGING
+# =========================================================
+
+def _lockout_id(prefix, account_id):
+    return f"{prefix}:{(account_id or '').strip().lower()}"[:240]
+
+
+def check_server_lockout(prefix, account_id):
+    """Accountgebonden lock-out in Supabase. Valt veilig terug op sessiebeveiliging als de tabel nog ontbreekt."""
+    if not account_id or not str(account_id).strip():
+        return False
+    try:
+        row = (
+            supabase.table("login_lockouts")
+            .select("Pogingen,VergrendeldTot")
+            .eq("LockoutID", _lockout_id(prefix, account_id))
+            .limit(1)
+            .execute()
+        ).data or []
+        if not row:
+            return False
+        vergrendeld_tot = row[0].get("VergrendeldTot")
+        if not vergrendeld_tot:
+            return False
+        from datetime import datetime, timezone
+        eind = datetime.fromisoformat(str(vergrendeld_tot).replace("Z", "+00:00"))
+        if eind > datetime.now(timezone.utc):
+            resterend = max(1, int((eind - datetime.now(timezone.utc)).total_seconds()))
+            minuten, seconden = divmod(resterend, 60)
+            wachttijd = f"{minuten}:{seconden:02d} minuten" if minuten else f"{seconden} seconden"
+            st.error(f"🔒 Te veel mislukte inlogpogingen voor dit account. Probeer het over {wachttijd} opnieuw.")
+            return True
+        reset_server_login_pogingen(prefix, account_id)
+    except Exception:
+        return False
+    return False
+
+
+def registreer_server_fout_inlog(prefix, account_id):
+    if not account_id or not str(account_id).strip():
+        return
+    try:
+        lockout_id = _lockout_id(prefix, account_id)
+        rows = (
+            supabase.table("login_lockouts")
+            .select("Pogingen")
+            .eq("LockoutID", lockout_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        pogingen = int(rows[0].get("Pogingen", 0)) + 1 if rows else 1
+        from datetime import datetime, timedelta, timezone
+        payload = {
+            "LockoutID": lockout_id,
+            "Pogingen": pogingen,
+            "VergrendeldTot": (
+                (datetime.now(timezone.utc) + timedelta(seconds=LOCKOUT_DUUR_SECONDEN)).isoformat()
+                if pogingen >= MAX_LOGIN_POGINGEN else None
+            ),
+            "Bijgewerkt": datetime.now(timezone.utc).isoformat(),
+        }
+        supabase.table("login_lockouts").upsert(payload, on_conflict="LockoutID").execute()
+    except Exception:
+        pass
+
+
+def reset_server_login_pogingen(prefix, account_id):
+    if not account_id or not str(account_id).strip():
+        return
+    try:
+        supabase.table("login_lockouts").delete().eq("LockoutID", _lockout_id(prefix, account_id)).execute()
+    except Exception:
+        pass

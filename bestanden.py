@@ -30,53 +30,50 @@ def haal_tabel_op(tabel, sleutel):
         if not pagina:
             return rijen
         rijen.extend(pagina)
-        if len(pagina) < PAGE_SIZE:
-            return rijen
 
 
-def _resultaten_query(gebruikersnaam=None, cluster=None):
-    query = supabase.table("resultaten").select("*")
-    if gebruikersnaam is not None:
-        query = query.eq("Gebruikersnaam", gebruikersnaam)
-    if cluster is not None:
-        query = query.eq("Cluster", cluster)
-    return query
+def _haal_resultaten_gefilterd(gebruikersnaam=None, cluster=None):
+    """Haal alle passende resultaten op, ook als de API per request minder rijen teruggeeft."""
+    rijen = []
+    while True:
+        query = supabase.table("resultaten").select("*")
+        if gebruikersnaam is not None:
+            query = query.eq("Gebruikersnaam", gebruikersnaam)
+        if cluster is not None:
+            query = query.eq("Cluster", cluster)
+        pagina = (
+            query.order("Tijdstip", desc=True)
+            .range(len(rijen), len(rijen) + PAGE_SIZE - 1)
+            .execute()
+        ).data or []
+        if not pagina:
+            return pd.DataFrame(rijen)
+        rijen.extend(pagina)
 
 
 def haal_resultaten_leerling(gebruikersnaam):
     """Haal uitsluitend resultaten van één leerling op."""
     try:
-        data = (
-            _resultaten_query(gebruikersnaam=gebruikersnaam)
-            .order("Tijdstip", desc=True)
-            .execute()
-        ).data or []
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Fout bij ophalen resultaten: {e}")
+        return _haal_resultaten_gefilterd(gebruikersnaam=gebruikersnaam)
+    except Exception:
+        st.error("Resultaten konden niet worden opgehaald. Probeer het later opnieuw.")
         st.stop()
 
 
 def haal_resultaten_klas(cluster):
     """Haal uitsluitend resultaten uit één klas op."""
     try:
-        data = (
-            _resultaten_query(cluster=cluster)
-            .order("Tijdstip", desc=True)
-            .execute()
-        ).data or []
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Fout bij ophalen klasresultaten: {e}")
+        return _haal_resultaten_gefilterd(cluster=cluster)
+    except Exception:
+        st.error("Klasresultaten konden niet worden opgehaald. Probeer het later opnieuw.")
         st.stop()
-
 
 def haal_alle_resultaten_op():
     """Alle resultaten; behouden voor beheer/migraties. Gebruik elders liever gefilterde functies."""
     try:
         return pd.DataFrame(haal_tabel_op("resultaten", "PogingID"))
     except Exception as e:
-        st.error(f"Fout bij ophalen resultaten: {e}")
+        st.error("Resultaten konden niet worden opgehaald. Probeer het later opnieuw.")
         st.stop()
 
 
@@ -122,7 +119,7 @@ def haal_bestanden_op(leerjaar, hoofdstuk):
                 break
         return [b["name"] for b in bestanden if b["name"].lower().endswith(".docx")]
     except Exception as e:
-        st.error(f"Lesmateriaal ophalen mislukt: {e}")
+        st.error("Lesmateriaal kon niet worden opgehaald. Probeer het later opnieuw.")
         st.stop()
 
 
@@ -148,7 +145,7 @@ def lees_docx(leerjaar, hoofdstuk, bestandsnaam):
         doc = docx.Document(io.BytesIO(response))
         return "\n".join(lees_document_blokken(doc))
     except Exception as e:
-        st.error(f"Fout bij lezen uit Supabase: {e}")
+        st.error("Het lesbestand kon niet worden gelezen.")
         return ""
 
 
@@ -202,5 +199,5 @@ def sla_resultaat_op(niveau, cluster, nummer, voornaam, gebruikersnaam,
         if not response.data:
             return False, "Supabase bevestigde de opslag niet."
         return True, ""
-    except Exception as e:
-        return False, str(e)
+    except Exception:
+        return False, "opslagfout"

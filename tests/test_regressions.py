@@ -141,18 +141,24 @@ class Regressies(unittest.TestCase):
         missing = toets(); del missing["vragen"][0]["correct"]; cases.append(missing)
         duplicate = toets(); duplicate["vragen"][1]["id"] = 1; cases.append(duplicate)
         short = toets(); short["vragen"].pop(); cases.append(short)
+        wrong_ids = toets(); wrong_ids["vragen"][5]["id"] = 7; cases.append(wrong_ids)
         for data in cases:
             with self.subTest(data=data), self.assertRaises(ValueError):
                 self.ai.valideer_toets(data)
 
     def test_score_grenzen_en_meerkeuze(self):
         answers = {i: "A) Een" for i in range(1, 5)}
-        for score in [-1, 7, float("nan"), float("inf"), None, True, "verkeerd", 6]:
-            evaluation = {"score_open_vragen_totaal": score,
-                          "beoordeling_open_vragen": "Feedback", "docenten_feedback": "Goed gewerkt"}
+        for score in [-1, 3.5, float("nan"), float("inf"), None, True, "verkeerd", 3.0]:
+            evaluation = {
+                "open_vragen": [
+                    {"id": 5, "score": score, "feedback": "Feedback 5"},
+                    {"id": 6, "score": 3.0, "feedback": "Feedback 6"},
+                ],
+                "docenten_feedback": "Goed gewerkt",
+            }
             with self.subTest(score=score), patch.object(self.ai, "ai_client") as client:
                 client.models.generate_content.return_value.text = json.dumps(evaluation)
-                if score == 6:
+                if score == 3.0:
                     self.assertEqual(self.ai.kijk_toets_na("Havo", "A", "Theorie", toets(), answers)[0], 10)
                 else:
                     with self.assertRaises((ValueError, TypeError)):
@@ -180,7 +186,7 @@ class Regressies(unittest.TestCase):
 
     def leerling_app(self, rows):
         stack = ExitStack(); self.addCleanup(stack.close)
-        stack.enter_context(patch.object(self.ui, "haal_alle_resultaten_op", side_effect=lambda: pd.DataFrame(rows)))
+        stack.enter_context(patch.object(self.ui, "haal_resultaten_leerling", side_effect=lambda gebruikersnaam: pd.DataFrame(rows)))
         stack.enter_context(patch.object(self.ui, "haal_bestanden_op", return_value=["a.docx"]))
         stack.enter_context(patch.object(self.ui, "lees_docx", side_effect=lambda year, chapter, file: chapter))
         generator = stack.enter_context(patch.object(self.ui, "genereer_toets_gecached", side_effect=lambda *args: toets()))

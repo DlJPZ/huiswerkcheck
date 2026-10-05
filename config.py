@@ -6,7 +6,7 @@ import datetime
 
 # --- 1. VERSIEBEHEER & PAGINA ---
 LAATSTE_UPDATE = "5 oktober 2026"
-VERSIE = "3.1.0"
+VERSIE = "3.2.0"
 
 def setup_page():
     st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
@@ -18,8 +18,6 @@ def init_apis():
         del os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
     
     api_key = st.secrets["GEMINI_API_KEY"].replace('"', '').replace("'", "").strip()
-    os.environ["GEMINI_API_KEY"] = api_key
-    
     if "ai_client" not in st.session_state:
         st.session_state.ai_client = genai.Client(api_key=api_key)
     
@@ -31,7 +29,7 @@ def init_apis():
         supabase_client: Client = create_client(supabase_url, supabase_key)
         return st.session_state.ai_client, supabase_client
     except Exception as e:
-        st.error(f"🚨 Fout bij initialiseren van Supabase. Controleer Streamlit Secrets. Error: {e}")
+        st.error("🚨 De databaseverbinding kon niet worden gestart. Controleer de serverinstellingen.")
         st.stop()
 
 # Initialiseer de clients zodat andere bestanden ze kunnen importeren
