@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import re
 import time
@@ -467,4 +466,4 @@ def toon_mini_game():
         resetGame();
     </script>
     """
-    components.html(game_html, height=220)
+    st.iframe(game_html, height=220)

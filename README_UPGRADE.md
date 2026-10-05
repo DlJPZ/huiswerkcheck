@@ -1,6 +1,17 @@
-# Upgrade 3.2.1
+# Upgrade 3.2.2
 
 Deze versie start overal via `main.py`.
+
+## Opstartreparatie 3.2.2
+- De Codespaces-startconfiguratie verwijst nu naar het bestaande `main.py`, in plaats van het verwijderde `huiswerkchecker.py`.
+- Het importeren van `config.py` start geen API-clients meer. Het inlogscherm werkt daardoor ook wanneer secrets nog niet zijn ingesteld.
+- Gemini en Supabase worden onafhankelijk en pas bij gebruik aangemaakt. Ontbrekende of ongeldige instellingen geven een duidelijke melding bij de functie die ze nodig heeft.
+- Clients worden hergebruikt via Streamlit's resource-cache.
+- De minigame gebruikt de huidige `st.iframe` API.
+
+Start lokaal met `streamlit run main.py`. Voeg voor database- en AI-functies `SUPABASE_URL`, `SUPABASE_KEY` en `GEMINI_API_KEY` toe aan `.streamlit/secrets.toml` of aan Streamlit Cloud Secrets. Commit dit secrets-bestand niet.
+
+Na het bijwerken van een bestaande Codespace: herbouw de container zodat de gewijzigde startconfiguratie wordt toegepast, of voer `streamlit run main.py` uit in de terminal.
 
 ## Na deployment
 Voer in Supabase SQL Editor opnieuw uit:

@@ -1,39 +1,71 @@
 import streamlit as st
 from google import genai
-import os
 import requests
 import datetime
 
 # --- 1. VERSIEBEHEER & PAGINA ---
 LAATSTE_UPDATE = "5 oktober 2026"
-VERSIE = "3.2.1"
+VERSIE = "3.2.2"
 
 def setup_page():
     st.set_page_config(page_title="Huiswerkcontrole AK", layout="wide")
 
 # --- 2. API & CLOUD INSTELLINGEN ---
-def init_apis():
-    # Gemini API instellen
-    if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
-        del os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-    
-    api_key = st.secrets["GEMINI_API_KEY"].replace('"', '').replace("'", "").strip()
-    if "ai_client" not in st.session_state:
-        st.session_state.ai_client = genai.Client(api_key=api_key)
-    
-    # Supabase Connectie
+def _vereiste_secret(naam):
+    """Lees instellingen pas bij gebruik, zonder geheime waarden te tonen."""
     try:
-        from supabase import create_client, Client
-        supabase_url = st.secrets["SUPABASE_URL"]
-        supabase_key = st.secrets["SUPABASE_KEY"]
-        supabase_client: Client = create_client(supabase_url, supabase_key)
-        return st.session_state.ai_client, supabase_client
-    except Exception as e:
+        waarde = st.secrets.get(naam, "")
+    except FileNotFoundError:
+        waarde = ""
+    waarde = waarde.strip().strip("\"'").strip() if isinstance(waarde, str) else ""
+    if not waarde:
+        st.error(f"De serverinstelling {naam} ontbreekt. De beheerder kan deze toevoegen aan Streamlit Secrets.")
+        st.stop()
+    return waarde
+
+
+@st.cache_resource(max_entries=1)
+def _maak_ai_client(api_key):
+    return genai.Client(api_key=api_key)
+
+
+@st.cache_resource(max_entries=1)
+def _maak_supabase_client(url, sleutel):
+    from supabase import create_client
+    return create_client(url, sleutel)
+
+
+def get_ai_client():
+    api_key = _vereiste_secret("GEMINI_API_KEY")
+    try:
+        return _maak_ai_client(api_key)
+    except Exception:
+        st.error("De AI-verbinding kon niet worden gestart. Controleer de serverinstellingen.")
+        st.stop()
+
+
+def get_supabase():
+    url = _vereiste_secret("SUPABASE_URL")
+    sleutel = _vereiste_secret("SUPABASE_KEY")
+    try:
+        return _maak_supabase_client(url, sleutel)
+    except Exception:
         st.error("🚨 De databaseverbinding kon niet worden gestart. Controleer de serverinstellingen.")
         st.stop()
 
-# Initialiseer de clients zodat andere bestanden ze kunnen importeren
-ai_client, supabase = init_apis()
+
+class _ClientBijGebruik:
+    """Behoud de bestaande module-imports zonder clients tijdens import te starten."""
+
+    def __init__(self, ophalen):
+        self._ophalen = ophalen
+
+    def __getattr__(self, naam):
+        return getattr(self._ophalen(), naam)
+
+
+ai_client = _ClientBijGebruik(get_ai_client)
+supabase = _ClientBijGebruik(get_supabase)
 
 # --- 3. DATALISTEN & STRUCTUUR ---
 NIVEAUS = {
