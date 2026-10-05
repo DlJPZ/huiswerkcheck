@@ -4,129 +4,594 @@ import json
 import math
 from config import ai_client
 
+
+# =========================================================
+# CONFIGURATIE
+# =========================================================
+
+GEMINI_MODEL = "gemini-3.8-flash"
+
+
+# =========================================================
+# HULPFUNCTIES
+# =========================================================
+
 def extract_json(raw_text):
-    """Filtert puur het JSON object uit de AI output, zelfs als de AI er markdown (```json) omheen zet."""
-    match = re.search(r'```json(.*?)```', raw_text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1).strip())
-    return json.loads(raw_text.strip())
+    """
+    Haalt een JSON-object uit de AI-output.
+    Werkt zowel met pure JSON als met ```json ... ``` markdownblokken.
+    """
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raise ValueError("Het AI-model gaf geen bruikbare tekst terug.")
+
+    match = re.search(
+        r'```(?:json)?\s*(.*?)\s*```',
+        raw_text,
+        re.DOTALL | re.IGNORECASE
+    )
+
+    json_text = match.group(1).strip() if match else raw_text.strip()
+
+    try:
+        return json.loads(json_text)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Het AI-model gaf geen geldige JSON terug: {e}"
+        )
 
 
 def valideer_toets(data):
-    vragen = data.get("vragen") if isinstance(data, dict) else None
+    """
+    Controleert of de gegenereerde toets exact voldoet
+    aan het afgesproken formaat.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("Ongeldig toetsformaat ontvangen.")
+
+    vragen = data.get("vragen")
+
     if not isinstance(vragen, list) or len(vragen) != 6:
-        raise ValueError("De toets moet precies zes vragen bevatten. Probeer opnieuw.")
+        raise ValueError(
+            "De toets moet precies zes vragen bevatten."
+        )
+
     ids = set()
     typen = []
-    for vraag in vragen:
+
+    for index, vraag in enumerate(vragen, start=1):
+
         if not isinstance(vraag, dict):
-            raise ValueError("Ongeldige vraag ontvangen.")
+            raise ValueError(
+                f"Vraag {index} heeft een ongeldig formaat."
+            )
+
         vraag_id = vraag.get("id")
-        if type(vraag_id) is not int or vraag_id in ids:
-            raise ValueError("Vraagnummer ontbreekt of komt dubbel voor.")
+
+        if type(vraag_id) is not int:
+            raise ValueError(
+                f"Vraag {index} heeft geen geldig numeriek ID."
+            )
+
+        if vraag_id in ids:
+            raise ValueError(
+                f"Vraag-ID {vraag_id} komt meerdere keren voor."
+            )
+
         ids.add(vraag_id)
-        if not isinstance(vraag.get("vraag"), str) or not vraag["vraag"].strip():
-            raise ValueError("Vraagtekst ontbreekt.")
-        typen.append(vraag.get("type"))
-        if vraag.get("type") == "mc":
+
+        vraagtekst = vraag.get("vraag")
+
+        if not isinstance(vraagtekst, str) or not vraagtekst.strip():
+            raise ValueError(
+                f"Vraag {vraag_id} heeft geen vraagtekst."
+            )
+
+        vraagtype = vraag.get("type")
+
+        if vraagtype not in ("mc", "open"):
+            raise ValueError(
+                f"Vraag {vraag_id} heeft een ongeldig vraagtype."
+            )
+
+        typen.append(vraagtype)
+
+        if vraagtype == "mc":
+
             opties = vraag.get("opties")
             correct = vraag.get("correct")
-            if (not isinstance(opties, list) or len(opties) != 4
-                    or any(not isinstance(optie, str) or not re.match(
-                        rf"^{letter}[).:\s]", optie.strip(), re.I)
-                        for letter, optie in zip("ABCD", opties))
-                    or not isinstance(correct, str)
-                    or correct.strip().upper() not in list("ABCD")):
-                raise ValueError("Meerkeuzevraag heeft ongeldige opties of geen geldig antwoord.")
-    if typen != ["mc"] * 4 + ["open"] * 2:
-        raise ValueError("De toets moet vier meerkeuzevragen en daarna twee open vragen bevatten.")
+
+            if not isinstance(opties, list) or len(opties) != 4:
+                raise ValueError(
+                    f"Vraag {vraag_id} moet precies vier antwoordopties hebben."
+                )
+
+            for letter, optie in zip("ABCD", opties):
+
+                if not isinstance(optie, str):
+                    raise ValueError(
+                        f"Vraag {vraag_id} bevat een ongeldige antwoordoptie."
+                    )
+
+                if not re.match(
+                    rf"^{letter}[).:\s]",
+                    optie.strip(),
+                    re.IGNORECASE
+                ):
+                    raise ValueError(
+                        f"Antwoordoptie {letter} van vraag {vraag_id} "
+                        f"begint niet correct met '{letter}'."
+                    )
+
+            if (
+                not isinstance(correct, str)
+                or correct.strip().upper() not in "ABCD"
+            ):
+                raise ValueError(
+                    f"Vraag {vraag_id} heeft geen geldig correct antwoord."
+                )
+
+    verwacht = ["mc", "mc", "mc", "mc", "open", "open"]
+
+    if typen != verwacht:
+        raise ValueError(
+            "De toets moet eerst vier meerkeuzevragen "
+            "en daarna twee open vragen bevatten."
+        )
+
     return data
+
+
+def valideer_open_beoordeling(data):
+    """
+    Controleert de JSON die Gemini teruggeeft
+    bij het nakijken van de open vragen.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(
+            "Ongeldige beoordeling ontvangen."
+        )
+
+    beoordelingen = data.get("open_vragen")
+
+    if not isinstance(beoordelingen, list):
+        raise ValueError(
+            "De beoordeling bevat geen lijst met open vragen."
+        )
+
+    if len(beoordelingen) != 2:
+        raise ValueError(
+            "Er moeten precies twee open vragen beoordeeld worden."
+        )
+
+    verwachte_ids = {5, 6}
+    gevonden_ids = set()
+
+    for beoordeling in beoordelingen:
+
+        if not isinstance(beoordeling, dict):
+            raise ValueError(
+                "Een beoordeling heeft een ongeldig formaat."
+            )
+
+        vraag_id = beoordeling.get("id")
+
+        if type(vraag_id) is not int:
+            raise ValueError(
+                "Een beoordeling mist een geldig vraagnummer."
+            )
+
+        if vraag_id not in verwachte_ids:
+            raise ValueError(
+                f"Onverwacht vraagnummer in beoordeling: {vraag_id}."
+            )
+
+        if vraag_id in gevonden_ids:
+            raise ValueError(
+                f"Vraag {vraag_id} is dubbel beoordeeld."
+            )
+
+        gevonden_ids.add(vraag_id)
+
+        score = beoordeling.get("score")
+
+        if isinstance(score, bool) or not isinstance(
+            score,
+            (int, float)
+        ):
+            raise ValueError(
+                f"Vraag {vraag_id} heeft geen geldige score."
+            )
+
+        score = float(score)
+
+        if not math.isfinite(score):
+            raise ValueError(
+                f"Vraag {vraag_id} heeft een ongeldige score."
+            )
+
+        if not 0.0 <= score <= 3.0:
+            raise ValueError(
+                f"De score voor vraag {vraag_id} "
+                f"moet tussen 0 en 3 liggen."
+            )
+
+        # Alleen hele of halve punten toestaan
+        if not math.isclose(
+            score * 2,
+            round(score * 2),
+            abs_tol=1e-9
+        ):
+            raise ValueError(
+                f"De score voor vraag {vraag_id} "
+                f"moet in stappen van 0,5 worden gegeven."
+            )
+
+        feedback = beoordeling.get("feedback")
+
+        if not isinstance(feedback, str) or not feedback.strip():
+            raise ValueError(
+                f"Vraag {vraag_id} bevat geen feedback."
+            )
+
+    if gevonden_ids != verwachte_ids:
+        raise ValueError(
+            "Niet alle open vragen zijn beoordeeld."
+        )
+
+    docenten_feedback = data.get("docenten_feedback")
+
+    if (
+        not isinstance(docenten_feedback, str)
+        or not docenten_feedback.strip()
+    ):
+        raise ValueError(
+            "De beoordeling bevat geen algemene feedback."
+        )
+
+    return data
+
+
+# =========================================================
+# TOETS GENEREREN
+# =========================================================
 
 @st.cache_data(show_spinner=False)
 def genereer_toets_gecached(les_tekst, niveau, versie):
-    """Fase 1: Gebruikt Flash-Lite om een overhoring te genereren (gecached per les, niveau en versie)."""
-    json_prompt = f"""Je bent docent aardrijkskunde (bovenbouw {niveau}). 
-    Genereer toetsversie {versie} op basis van de theorie. Zorg dat de vragen wezenlijk anders zijn dan andere versies.
-    
-    EISEN:
-    - Maak EXACT 4 meerkeuzevragen (Onthouden/Begrijpen). 4 opties (A, B, C, D). Geef het correcte antwoord (alleen de hoofdletter).
-    - Maak EXACT 2 open vragen (Inzicht/Toepassing).
-    
-    UITVOERFORMAAT (Strikt JSON):
-    {{
-        "vragen": [
-            {{"id": 1, "type": "mc", "vraag": "[vraagtekst]", "opties": ["A) [optie]", "B) [optie]", "C) [optie]", "D) [optie]"], "correct": "A"}},
-            {{"id": 2, "type": "mc", "vraag": "[vraagtekst]", "opties": ["A) [optie]", "B) [optie]", "C) [optie]", "D) [optie]"], "correct": "B"}},
-            {{"id": 3, "type": "mc", "vraag": "[vraagtekst]", "opties": ["A) [optie]", "B) [optie]", "C) [optie]", "D) [optie]"], "correct": "C"}},
-            {{"id": 4, "type": "mc", "vraag": "[vraagtekst]", "opties": ["A) [optie]", "B) [optie]", "C) [optie]", "D) [optie]"], "correct": "D"}},
-            {{"id": 5, "type": "open", "vraag": "[open vraag 1]"}},
-            {{"id": 6, "type": "open", "vraag": "[open vraag 2]"}}
-        ]
-    }}
-
-    --- THEORIE ---
-    {les_tekst}
     """
-    response = ai_client.models.generate_content(model='gemini-3.8-flash', contents=json_prompt)
-    return valideer_toets(extract_json(response.text))
+    Genereert een korte overhoring met Gemini.
+    Resultaten worden gecached per les, niveau en versie.
+    """
 
-def kijk_toets_na(niveau, voornaam, les_tekst, vragen_data, antwoorden):
-    """Fase 3: Kijkt MC lokaal na en gebruikt Gemini Pro voor de open vragen."""
+    json_prompt = f"""
+Je bent een ervaren docent aardrijkskunde in de bovenbouw van {niveau}.
+
+Genereer toetsversie {versie} uitsluitend op basis van de gegeven theorie.
+
+De vragen moeten inhoudelijk correct zijn en passen bij het niveau.
+
+Zorg ervoor dat deze toetsversie wezenlijk andere vragen bevat
+dan andere mogelijke versies.
+
+EISEN:
+
+1. Maak EXACT 4 meerkeuzevragen.
+2. Deze vragen toetsen vooral onthouden en begrijpen.
+3. Iedere meerkeuzevraag heeft EXACT vier antwoordopties:
+   A, B, C en D.
+4. Er is precies één correct antwoord.
+5. Zorg dat de afleiders geloofwaardig zijn.
+6. Maak daarna EXACT 2 open vragen.
+7. De open vragen toetsen inzicht en/of toepassing.
+8. Alle vragen moeten volledig te beantwoorden zijn
+   met behulp van de aangeleverde theorie.
+9. Voeg geen informatie toe die niet uit de theorie volgt.
+
+Geef ALLEEN geldige JSON terug.
+
+UITVOERFORMAAT:
+
+{{
+    "vragen": [
+        {{
+            "id": 1,
+            "type": "mc",
+            "vraag": "[vraagtekst]",
+            "opties": [
+                "A) [optie]",
+                "B) [optie]",
+                "C) [optie]",
+                "D) [optie]"
+            ],
+            "correct": "A"
+        }},
+        {{
+            "id": 2,
+            "type": "mc",
+            "vraag": "[vraagtekst]",
+            "opties": [
+                "A) [optie]",
+                "B) [optie]",
+                "C) [optie]",
+                "D) [optie]"
+            ],
+            "correct": "B"
+        }},
+        {{
+            "id": 3,
+            "type": "mc",
+            "vraag": "[vraagtekst]",
+            "opties": [
+                "A) [optie]",
+                "B) [optie]",
+                "C) [optie]",
+                "D) [optie]"
+            ],
+            "correct": "C"
+        }},
+        {{
+            "id": 4,
+            "type": "mc",
+            "vraag": "[vraagtekst]",
+            "opties": [
+                "A) [optie]",
+                "B) [optie]",
+                "C) [optie]",
+                "D) [optie]"
+            ],
+            "correct": "D"
+        }},
+        {{
+            "id": 5,
+            "type": "open",
+            "vraag": "[open vraag 1]"
+        }},
+        {{
+            "id": 6,
+            "type": "open",
+            "vraag": "[open vraag 2]"
+        }}
+    ]
+}}
+
+--- THEORIE ---
+
+{les_tekst}
+"""
+
+    response = ai_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=json_prompt
+    )
+
+    data = extract_json(response.text)
+
+    return valideer_toets(data)
+
+
+# =========================================================
+# TOETS NAKIJKEN
+# =========================================================
+
+def kijk_toets_na(
+    niveau,
+    voornaam,
+    les_tekst,
+    vragen_data,
+    antwoorden
+):
+    """
+    Kijkt meerkeuzevragen lokaal na.
+    Gemini beoordeelt uitsluitend de twee open vragen.
+    """
+
     valideer_toets(vragen_data)
+
     mc_score = 0.0
-    mc_feedback = ""
-    open_vragen_text = ""
-    
-    # 1. Kijk MC lokaal na via Python (1 pt per vraag)
-    for idx, v in enumerate(vragen_data.get("vragen", [])):
-        gegeven = antwoorden.get(v['id'], '')
-        if v.get('type') == 'mc':
-            correcte_letter = v.get('correct', '').strip().upper()
-            juiste_optie = v['opties']["ABCD".index(correcte_letter)]
-            is_goed = gegeven == juiste_optie
+    mc_feedback = []
+
+    open_vragen = []
+
+    # -----------------------------------------------------
+    # 1. Meerkeuzevragen lokaal nakijken
+    # -----------------------------------------------------
+
+    for vraag in vragen_data["vragen"]:
+
+        vraag_id = vraag["id"]
+
+        gegeven = antwoorden.get(vraag_id, "")
+
+        if vraag["type"] == "mc":
+
+            correcte_letter = (
+                vraag["correct"]
+                .strip()
+                .upper()
+            )
+
+            juiste_optie = vraag["opties"][
+                "ABCD".index(correcte_letter)
+            ]
+
+            # Ondersteunt zowel volledige optie als alleen A/B/C/D
+            gegeven_normaal = str(gegeven).strip()
+
+            gegeven_letter = ""
+
+            match = re.match(
+                r"^([ABCD])",
+                gegeven_normaal,
+                re.IGNORECASE
+            )
+
+            if match:
+                gegeven_letter = match.group(1).upper()
+
+            is_goed = (
+                gegeven_letter == correcte_letter
+                or gegeven_normaal == juiste_optie
+            )
+
             if is_goed:
+
                 mc_score += 1.0
-                mc_feedback += f"**Vraag {idx + 1} (MC):** ✅ Goed antwoord ({correcte_letter}).\n\n"
+
+                mc_feedback.append(
+                    f"**Vraag {vraag_id} (MC):** "
+                    f"✅ Goed antwoord ({correcte_letter})."
+                )
+
             else:
-                mc_feedback += f"**Vraag {idx + 1} (MC):** ❌ Fout. Je koos '{gegeven}', het juiste antwoord was {correcte_letter}.\n\n"
+
+                gekozen_weergave = (
+                    gegeven_normaal
+                    if gegeven_normaal
+                    else "geen antwoord"
+                )
+
+                mc_feedback.append(
+                    f"**Vraag {vraag_id} (MC):** "
+                    f"❌ Fout. Je antwoordde "
+                    f"'{gekozen_weergave}'. "
+                    f"Het juiste antwoord was "
+                    f"{correcte_letter}."
+                )
+
         else:
-            open_vragen_text += f"Vraag {idx + 1}: {v.get('vraag')}\nGegeven antwoord: {gegeven}\n\n"
-            
-    # 2. Laat AI (Pro model) de open vragen nakijken
-    prompt_nakijken = f"""Je bent docent aardrijkskunde ({niveau}). Beoordeel onderstaande 2 open vragen van leerling {voornaam}.
-    Elke open vraag is maximaal 3.0 punten waard. Wees coulant op begrip en synoniemen. Deel halve punten uit bij een deels correct antwoord. Trek 0.1 punt af per spelfout (max 1 pt aftrek).
 
-    UITVOERFORMAAT (Strikt JSON):
-    {{
-        "beoordeling_open_vragen": "**Vraag 5 (Open):** [score]/3.0pt - [korte uitleg]\\n\\n**Vraag 6 (Open):** [score]/3.0pt - [korte uitleg]",
-        "score_open_vragen_totaal": [getal tussen 0.0 en 6.0],
-        "docenten_feedback": "[Max 2 zinnen met globale positieve feedback over de gehele inzet]"
-    }}
+            open_vragen.append({
+                "id": vraag_id,
+                "vraag": vraag["vraag"],
+                "antwoord": str(gegeven).strip()
+            })
 
-    --- THEORIE ---
-    {les_tekst}
-    
-    --- ANTWOORDEN ---
-    {open_vragen_text}
-    """
-    
-    resp = ai_client.models.generate_content(model='gemini-3.1-pro', contents=prompt_nakijken)
-    ai_eval = extract_json(resp.text)
-    
-    if not isinstance(ai_eval, dict):
-        raise ValueError("Ongeldige beoordeling ontvangen. Probeer opnieuw.")
-    waarde = ai_eval.get("score_open_vragen_totaal")
-    if isinstance(waarde, bool) or not isinstance(waarde, (int, float, str)):
-        raise ValueError("De beoordeling bevat geen geldige score.")
-    open_score = float(waarde)
-    if not math.isfinite(open_score) or not 0.0 <= open_score <= 6.0:
-        raise ValueError("De score voor open vragen moet tussen 0 en 6 liggen.")
-    for veld in ("beoordeling_open_vragen", "docenten_feedback"):
-        if not isinstance(ai_eval.get(veld), str) or not ai_eval[veld].strip():
-            raise ValueError("De beoordeling bevat geen volledige feedback.")
+    # -----------------------------------------------------
+    # 2. Open vragen door Gemini laten nakijken
+    # -----------------------------------------------------
+
+    open_vragen_text = ""
+
+    for item in open_vragen:
+
+        antwoord = (
+            item["antwoord"]
+            if item["antwoord"]
+            else "[geen antwoord]"
+        )
+
+        open_vragen_text += (
+            f"Vraag {item['id']}:\n"
+            f"{item['vraag']}\n\n"
+            f"Antwoord leerling:\n"
+            f"{antwoord}\n\n"
+        )
+
+    prompt_nakijken = f"""
+Je bent een ervaren docent aardrijkskunde in {niveau}.
+
+Je beoordeelt twee open vragen van leerling {voornaam}.
+
+Gebruik UITSLUITEND:
+- de gegeven theorie;
+- de gestelde vraag;
+- het antwoord van de leerling.
+
+BEOORDELINGSREGELS:
+
+- Iedere open vraag is maximaal 3,0 punten waard.
+- Geef uitsluitend scores in stappen van 0,5 punt:
+  0 / 0,5 / 1 / 1,5 / 2 / 2,5 / 3.
+- Beoordeel primair de aardrijkskundige inhoud.
+- Een antwoord hoeft niet letterlijk overeen te komen
+  met de theorie.
+- Accepteer correcte synoniemen en andere correcte formuleringen.
+- Geef gedeeltelijke punten als een deel van het antwoord correct is.
+- Geef alleen punten voor inhoud die daadwerkelijk
+  in het antwoord van de leerling staat.
+- Vul ontbrekende redeneringen NIET zelf aan.
+- Beoordeel spelling en grammatica NIET,
+  tenzij een taalfout de inhoudelijke betekenis
+  van het antwoord wezenlijk verandert.
+- Wees consequent tussen leerlingen.
+- Baseer feedback op concrete sterke of ontbrekende onderdelen.
+
+Geef ALLEEN geldige JSON terug.
+
+UITVOERFORMAAT:
+
+{{
+    "open_vragen": [
+        {{
+            "id": 5,
+            "score": 0.0,
+            "feedback": "[korte inhoudelijke uitleg van de score]"
+        }},
+        {{
+            "id": 6,
+            "score": 0.0,
+            "feedback": "[korte inhoudelijke uitleg van de score]"
+        }}
+    ],
+    "docenten_feedback":
+        "[maximaal twee korte zinnen met algemene feedback]"
+}}
+
+--- THEORIE ---
+
+{les_tekst}
+
+--- VRAGEN EN ANTWOORDEN ---
+
+{open_vragen_text}
+"""
+
+    response = ai_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt_nakijken
+    )
+
+    ai_eval = extract_json(response.text)
+
+    valideer_open_beoordeling(ai_eval)
+
+    # -----------------------------------------------------
+    # 3. Scores zelf optellen
+    # -----------------------------------------------------
+
+    beoordelingen = sorted(
+        ai_eval["open_vragen"],
+        key=lambda x: x["id"]
+    )
+
+    open_score = sum(
+        float(item["score"])
+        for item in beoordelingen
+    )
+
     totaal_score = mc_score + open_score
-    
-    volledige_feedback = mc_feedback + ai_eval.get("beoordeling_open_vragen", "")
-    ai_docent_tekst = ai_eval.get("docenten_feedback", "Toets afgerond.")
-    
-    return totaal_score, volledige_feedback, ai_docent_tekst
+
+    # -----------------------------------------------------
+    # 4. Feedback netjes opbouwen
+    # -----------------------------------------------------
+
+    feedback_delen = []
+
+    feedback_delen.extend(mc_feedback)
+
+    for item in beoordelingen:
+
+        feedback_delen.append(
+            f"**Vraag {item['id']} (Open):** "
+            f"{float(item['score']):.1f}/3.0 pt\n\n"
+            f"{item['feedback']}"
+        )
+
+    volledige_feedback = "\n\n".join(feedback_delen)
+
+    ai_docent_tekst = ai_eval["docenten_feedback"].strip()
+
+    return (
+        totaal_score,
+        volledige_feedback,
+        ai_docent_tekst
+    )
