@@ -116,14 +116,19 @@ def toon_leerling_paneel():
                             if st.session_state.get("vragen_data") and not st.session_state.get("nakijk_resultaat"):
                                 st.success("💡 De vragen zijn gegenereerd! Vul de antwoorden hieronder in en klik op 'Lever in'.")
                                 
-                                boek_dicht_keuze = st.radio("Voordat je begint: Heb je het boek gesloten?", ["Ja, ik ga de vragen uit mijn hoofd maken", "Nee, ik gebruik mijn boek als hulp"])
+                                boek_dicht_keuze = st.radio(
+                                    "Voordat je begint: Heb je het boek gesloten?",
+                                    ["Ja, ik ga de vragen uit mijn hoofd maken", "Nee, ik gebruik mijn boek als hulp"],
+                                    index=None,
+                                    key=f"boek_dicht_{gekozen_les_id}_{versie}",
+                                )
                                 
                                 with st.form("overhoring_form"):
                                     antwoorden = {}
                                     for idx, v in enumerate(st.session_state.vragen_data.get("vragen", [])):
                                         st.markdown(f"**Vraag {idx + 1}**")
                                         if v.get('type') == 'mc':
-                                            antwoorden[v['id']] = st.radio(v.get('vraag', 'Vraag?'), v.get('opties', []), key=f"q_{gekozen_les_id}_{versie}_{v['id']}")
+                                            antwoorden[v['id']] = st.radio(v.get('vraag', 'Vraag?'), v.get('opties', []), index=None, key=f"q_{gekozen_les_id}_{versie}_{v['id']}")
                                         else:
                                             antwoorden[v['id']] = st.text_area(v.get('vraag', 'Open Vraag?'), key=f"q_{gekozen_les_id}_{versie}_{v['id']}")
                                         st.write("") 
@@ -132,46 +137,53 @@ def toon_leerling_paneel():
                                     
                                     # Fase 3: Nakijken & Feedback
                                     if submitted:
-                                        with st.spinner("De docent kijkt je werk na..."):
-                                            try:
-                                                # Roep de nieuwe logica aan uit ai_docent.py
-                                                totaal_score, volledige_feedback, ai_docent_tekst = kijk_toets_na(
-                                                    st.session_state.niveau,
-                                                    st.session_state.voornaam,
-                                                    les_tekst,
-                                                    st.session_state.vragen_data,
-                                                    antwoorden
-                                                )
-                                                
-                                                boek_dicht_status = "Ja" if "Ja" in boek_dicht_keuze else "Nee"
-                                                
-                                                # Gastresultaten blijven uitsluitend in de sessie; zo vervuilt de database niet.
-                                                if is_gast:
-                                                    success, err_msg = True, ""
-                                                else:
-                                                    success, err_msg = sla_resultaat_op(
+                                        onvolledig = boek_dicht_keuze is None or any(
+                                            antwoord is None or not str(antwoord).strip()
+                                            for antwoord in antwoorden.values()
+                                        )
+                                        if onvolledig:
+                                            st.error("Vul alle vragen in en geef aan of je het boek hebt gesloten voordat je inlevert.")
+                                        else:
+                                            with st.spinner("De docent kijkt je werk na..."):
+                                                try:
+                                                    # Roep de nieuwe logica aan uit ai_docent.py
+                                                    totaal_score, volledige_feedback, ai_docent_tekst = kijk_toets_na(
                                                         st.session_state.niveau,
-                                                        st.session_state.cluster,
-                                                        st.session_state.get("nummer", "999"),
                                                         st.session_state.voornaam,
-                                                        st.session_state.gebruikersnaam,
-                                                        gekozen_les_id,
-                                                        totaal_score,
-                                                        volledige_feedback,
-                                                        boek_dicht_status
+                                                        les_tekst,
+                                                        st.session_state.vragen_data,
+                                                        antwoorden
                                                     )
-                                                
-                                                if success:
-                                                    st.session_state.toets_ingeleverd = True
-                                                    st.session_state.nakijk_resultaat = volledige_feedback
-                                                    st.session_state.huidig_cijfer = totaal_score
-                                                    st.session_state.docenten_feedback = ai_docent_tekst
-                                                    st.rerun()
-                                                else:
-                                                    st.error("🚨 Het resultaat kon niet worden opgeslagen. Je antwoorden zijn nog bewaard in de invulvelden hierboven. Probeer zo opnieuw in te leveren.")
-                                                    
-                                            except Exception as e:
-                                                st.error("🚨 Het nakijken is tijdelijk mislukt. Je antwoorden blijven staan; probeer zo opnieuw.")
+
+                                                    boek_dicht_status = "Ja" if "Ja" in boek_dicht_keuze else "Nee"
+
+                                                    # Gastresultaten blijven uitsluitend in de sessie; zo vervuilt de database niet.
+                                                    if is_gast:
+                                                        success, err_msg = True, ""
+                                                    else:
+                                                        success, err_msg = sla_resultaat_op(
+                                                            st.session_state.niveau,
+                                                            st.session_state.cluster,
+                                                            st.session_state.get("nummer", "999"),
+                                                            st.session_state.voornaam,
+                                                            st.session_state.gebruikersnaam,
+                                                            gekozen_les_id,
+                                                            totaal_score,
+                                                            volledige_feedback,
+                                                            boek_dicht_status
+                                                        )
+
+                                                    if success:
+                                                        st.session_state.toets_ingeleverd = True
+                                                        st.session_state.nakijk_resultaat = volledige_feedback
+                                                        st.session_state.huidig_cijfer = totaal_score
+                                                        st.session_state.docenten_feedback = ai_docent_tekst
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("🚨 Het resultaat kon niet worden opgeslagen. Je antwoorden zijn nog bewaard in de invulvelden hierboven. Probeer zo opnieuw in te leveren.")
+
+                                                except Exception:
+                                                    st.error("🚨 Het nakijken is tijdelijk mislukt. Je antwoorden blijven staan; probeer zo opnieuw.")
 
                             # Feedback overzicht tonen
                             if st.session_state.get("nakijk_resultaat"):
@@ -251,7 +263,7 @@ def toon_leerling_paneel():
         )
 
         try:
-            df_storingen = haal_storingen()
+            df_storingen = haal_storingen(alleen_zichtbaar_voor_leerlingen=True)
         except Exception as e:
             st.error("Storingen konden niet worden opgehaald. Probeer het later opnieuw.")
             df_storingen = pd.DataFrame()
@@ -326,6 +338,8 @@ def toon_leerling_paneel():
                         gebruikersnaam=st.session_state.get("gebruikersnaam", ""),
                         cluster=st.session_state.get("cluster", ""),
                         uploaded_file=bijlage,
+                        zichtbaar_voor_leerlingen=True,
+                        melder_key=st.session_state.get("gebruikersnaam", ""),
                     )
                     st.success("✅ Storing gemeld. De status is nu 'in behandeling'.")
                     st.rerun()

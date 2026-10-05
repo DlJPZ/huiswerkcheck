@@ -191,6 +191,7 @@ class Regressies(unittest.TestCase):
         stack.enter_context(patch.object(self.ui, "lees_docx", side_effect=lambda year, chapter, file: chapter))
         generator = stack.enter_context(patch.object(self.ui, "genereer_toets_gecached", side_effect=lambda *args: toets()))
         stack.enter_context(patch.object(self.ui, "kijk_toets_na", return_value=(8.0, "Feedback", "Goed gewerkt")))
+        stack.enter_context(patch.object(self.ui, "haal_storingen", return_value=pd.DataFrame()))
         def save(*args):
             rows.append({"PogingID": str(len(rows)), "Gebruikersnaam": "a", "Cluster": "4Hak1",
                          "Les": args[5], "Cijfer": args[6], "Beoordeling": args[7],
@@ -204,11 +205,24 @@ class Regressies(unittest.TestCase):
         self.assertFalse(app.exception)
         return app, generator
 
+    def vul_toets_in(self, app, open_antwoord="Mijn antwoord"):
+        # Boek-dicht-keuze + vier meerkeuzevragen hebben bewust geen default meer.
+        for radio in app.radio:
+            if radio.label.startswith("Voordat je begint"):
+                radio.set_value("Ja, ik ga de vragen uit mijn hoofd maken")
+            elif radio.options:
+                radio.set_value(radio.options[0])
+        for veld in app.text_area:
+            if veld.label.startswith("Vraag 5") or veld.label.startswith("Vraag 6"):
+                veld.set_value(open_antwoord)
+        app.run()
+
     def test_feedback_blijft_na_alle_drie_pogingen_en_gaston_is_geen_gast(self):
         rows = []
         app, generator = self.leerling_app(rows)
         app.selectbox(key="ll_kies_les").select("a.docx").run()
         for attempt in range(1, 4):
+            self.vul_toets_in(app)
             next(b for b in app.button if b.label == "Lever in").click().run()
             self.assertFalse(app.exception)
             self.assertEqual(len(rows), attempt)
@@ -254,13 +268,22 @@ class Regressies(unittest.TestCase):
     def test_opslagfout_toont_geen_ingeleverd_en_behoudt_antwoorden(self):
         app, _ = self.leerling_app([])
         app.selectbox(key="ll_kies_les").select("a.docx").run()
-        app.text_area[0].set_value("Mijn antwoord")
+        self.vul_toets_in(app, "Mijn antwoord")
         with patch.object(self.ui, "sla_resultaat_op", return_value=(False, "offline")):
             next(b for b in app.button if b.label == "Lever in").click().run()
         self.assertFalse(app.exception)
         self.assertFalse(app.session_state["toets_ingeleverd"])
         self.assertEqual(app.text_area[0].value, "Mijn antwoord")
-        self.assertTrue(any("database weigerde" in e.value for e in app.error))
+        self.assertTrue(any("kon niet worden opgeslagen" in e.value for e in app.error))
+
+
+    def test_toets_kan_niet_leeg_worden_ingeleverd(self):
+        app, _ = self.leerling_app([])
+        app.selectbox(key="ll_kies_les").select("a.docx").run()
+        next(b for b in app.button if b.label == "Lever in").click().run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.session_state.get("toets_ingeleverd", False))
+        self.assertTrue(any("Vul alle vragen in" in e.value for e in app.error))
 
     def test_echte_gast_behoudt_gastfuncties(self):
         app, _ = self.leerling_app([])
@@ -271,7 +294,9 @@ class Regressies(unittest.TestCase):
         self.assertTrue(any("Gasten hebben geen instellingen" in e.value for e in app.warning))
 
     def test_admin_niveau_ververst_klassen_voor_verzenden(self):
-        with patch.object(self.beheer, "laad_gebruikers", side_effect=lambda: self.auth.AccountOverzicht({})), patch.object(self.beheer, "laad_docenten", side_effect=lambda: self.auth.AccountOverzicht({})):
+        with patch.object(self.beheer, "laad_gebruikers", side_effect=lambda: self.auth.AccountOverzicht({})), \
+             patch.object(self.beheer, "laad_docenten", side_effect=lambda: self.auth.AccountOverzicht({})), \
+             patch.object(self.beheer, "haal_storingen", return_value=pd.DataFrame()):
             app = AppTest.from_file(str(ROOT / "main.py"), default_timeout=10)
             for key, value in dict(ingelogd=True, rol="admin", docent_naam="Beheerder").items():
                 app.session_state[key] = value

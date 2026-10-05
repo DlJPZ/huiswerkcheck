@@ -242,6 +242,44 @@ def laad_gebruikers():
         st.stop()
 
 
+
+def laad_gebruikers_voor_klassen(klassen):
+    """Haal alleen minimale leerlinggegevens op voor klassen van een docent.
+
+    WachtwoordHash wordt bewust nooit geselecteerd.
+    """
+    toegestane_klassen = [str(k).strip() for k in (klassen or []) if str(k).strip()]
+    if not toegestane_klassen:
+        return AccountOverzicht({})
+
+    try:
+        users = {}
+        for cluster in toegestane_klassen:
+            offset = 0
+            while True:
+                pagina = (
+                    supabase.table("gebruikers")
+                    .select("Gebruikersnaam,Voornaam,Niveau,Cluster,Goedgekeurd,Nummer")
+                    .eq("Cluster", cluster)
+                    .order("Gebruikersnaam")
+                    .range(offset, offset + 499)
+                    .execute()
+                ).data or []
+                if not pagina:
+                    break
+                for row in pagina:
+                    gebruikersnaam = row.get("Gebruikersnaam")
+                    if not gebruikersnaam:
+                        continue
+                    row.setdefault("Goedgekeurd", "Ja")
+                    row.setdefault("Nummer", "999")
+                    users[gebruikersnaam] = row
+                offset += len(pagina)
+        return AccountOverzicht(users)
+    except Exception:
+        st.warning("Leerlingen konden niet worden opgehaald. Probeer het later opnieuw.")
+        st.stop()
+
 def bewaar_alle_gebruikers(users_dict):
     try:
         bewaar_account_wijzigingen("gebruikers", "Gebruikersnaam", users_dict)

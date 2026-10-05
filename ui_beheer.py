@@ -4,7 +4,7 @@ import re
 import time
 from pathlib import PurePath
 from config import supabase, HOOFDSTUKKEN, ALLE_CLUSTERS, NIVEAUS, LEERJAREN_CLUSTERS
-from auth import laad_gebruikers, bewaar_alle_gebruikers, laad_docenten, bewaar_alle_docenten, hash_wachtwoord, is_sterk_wachtwoord, verwijder_account
+from auth import laad_gebruikers, laad_gebruikers_voor_klassen, bewaar_alle_gebruikers, laad_docenten, bewaar_alle_docenten, hash_wachtwoord, is_sterk_wachtwoord, verwijder_account
 from bestanden import haal_resultaten_klas, haal_bestanden_op, les_resultaat_mask, sla_docentreactie_op
 from storingen import haal_storingen, download_bijlage, werk_storing_bij
 
@@ -27,7 +27,7 @@ def toon_docent_paneel():
     st.divider()
     tab_res, tab_check, tab_up, tab_keuren = st.tabs(["📊 Resultaten & Feedback", "📋 Controle Inleveringen", "📄 Lesmateriaal Uploaden", "✅ Leerlingen Keuren"])
     
-    alle_gebruikers = laad_gebruikers()
+    alle_gebruikers = laad_gebruikers_voor_klassen(mijn_klassen)
     
     with tab_res:
         ll_ruw = {gn: data for gn, data in alle_gebruikers.items() if data.get("Cluster") == docent_klas and data.get("Goedgekeurd", "Ja") == "Ja"}
@@ -102,9 +102,19 @@ def toon_docent_paneel():
                 st.info("Geen lesmateriaal in deze map.")
 
     with tab_up:
+        toegestane_leerjaren = [
+            leerjaar for leerjaar, clusters in LEERJAREN_CLUSTERS.items()
+            if any(klas in mijn_klassen for klas in clusters)
+        ]
+        if not toegestane_leerjaren:
+            st.warning("Er is geen leerjaar gekoppeld aan jouw toegewezen klassen.")
+            return
+
         col1, col2 = st.columns(2)
-        with col1: up_leerjaar = st.selectbox("Kies leerjaar:", list(HOOFDSTUKKEN.keys()), key="up_lj_select")
-        with col2: up_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar], key="up_hst_select")
+        with col1:
+            up_leerjaar = st.selectbox("Kies leerjaar:", toegestane_leerjaren, key="up_lj_select")
+        with col2:
+            up_hst = st.selectbox("Kies hoofdstuk:", HOOFDSTUKKEN[up_leerjaar], key="up_hst_select")
         
         st.divider()
         st.write(f"**Huidige lesmaterialen in {up_leerjaar} / {up_hst}:**")
@@ -117,6 +127,9 @@ def toon_docent_paneel():
                     st.write(f"📄 {b}")
                 with col_del:
                     if st.button("❌", key=f"del_file_{up_leerjaar}_{up_hst}_{b}", help="Verwijder dit bestand"):
+                        if up_leerjaar not in toegestane_leerjaren:
+                            st.error("Je mag geen lesmateriaal voor dit leerjaar wijzigen.")
+                            continue
                         try:
                             supabase.storage.from_("lesmateriaal").remove([f"{up_leerjaar}/{up_hst}/{b}"])
                             st.success(f"Verwijderd: {b}")
@@ -136,6 +149,9 @@ def toon_docent_paneel():
         
         if uploaded_files:
             if st.button("Opslaan & Uploaden", type="primary"):
+                if up_leerjaar not in toegestane_leerjaren:
+                    st.error("Je mag geen lesmateriaal voor dit leerjaar uploaden.")
+                    st.stop()
                 success_count = 0
                 for uploaded_file in uploaded_files:
                     veilige_naam = PurePath(uploaded_file.name).name
@@ -478,6 +494,8 @@ def toon_admin_paneel():
                 titel = str(storing.get("Titel", "Storing"))
 
                 with st.expander(f"{icoon} {titel} — {status}"):
+                    if storing.get("ZichtbaarVoorLeerlingen", True) is False:
+                        st.warning("🔒 Privémelding — alleen zichtbaar voor de beheerder.")
                     st.write(f"**Categorie:** {storing.get('Categorie', 'Overig')}")
                     st.write(f"**Gemeld:** {storing.get('Aangemaakt', '')}")
                     st.write(f"**Aantal meldingen:** {int(storing.get('MeldingenAantal', 1) or 1)}")

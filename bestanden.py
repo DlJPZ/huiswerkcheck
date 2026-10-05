@@ -4,6 +4,7 @@ import docx
 import io
 import uuid
 import datetime
+from zoneinfo import ZoneInfo
 from config import supabase, LEERJAREN_CLUSTERS, HOOFDSTUKKEN
 from docx.text.paragraph import Paragraph
 from docx.table import Table
@@ -176,7 +177,7 @@ def sla_docentreactie_op(poging_id, gebruikersnaam, cluster, reactie):
 
 def sla_resultaat_op(niveau, cluster, nummer, voornaam, gebruikersnaam,
                      gekozen_les, cijfer, beoordeling, boek_dicht):
-    tijdstip = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    tijdstip = datetime.datetime.now(ZoneInfo("Europe/Amsterdam")).strftime("%Y-%m-%d %H:%M")
     poging_id = str(uuid.uuid4())
 
     data = {

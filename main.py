@@ -47,43 +47,48 @@ elif not st.session_state.get("ingelogd"):
                 
                 if submitted_docent:
                     docent_id = d_login.strip()
-                    if check_server_lockout("docent", docent_id):
-                        st.stop()
 
-                    admin_hash = str(st.secrets.get("ADMIN_WACHTWOORD_HASH", "")).strip()
-                    admin_ww = str(st.secrets.get("ADMIN_WACHTWOORD", "")).strip()
-                    admin_ok = False
+                    # Admin gebruikt alleen de sessie-lockout. Zo kan iemand die de
+                    # bekende gebruikersnaam "admin" kent de beheerder niet server-side blokkeren.
                     if docent_id.lower() == "admin":
+                        admin_hash = str(st.secrets.get("ADMIN_WACHTWOORD_HASH", "")).strip()
+                        admin_ww = str(st.secrets.get("ADMIN_WACHTWOORD", "")).strip()
+                        admin_ok = False
                         if admin_hash:
                             admin_ok = controleer_wachtwoord(d_ww, admin_hash)
                         elif admin_ww:
-                            # Tijdelijke compatibiliteit; vervang door ADMIN_WACHTWOORD_HASH.
                             admin_ok = hmac.compare_digest(d_ww.encode("utf-8"), admin_ww.encode("utf-8"))
 
-                    if admin_ok:
-                        reset_login_pogingen("docent")
-                        reset_server_login_pogingen("docent", docent_id)
-                        st.session_state.ingelogd = True
-                        st.session_state.rol = "admin"
-                        st.session_state.docent_naam = "Beheerder"
-                        st.rerun()
-
-                    docent = None if docent_id.lower() == "admin" else haal_docent(docent_id)
-                    if not docent or not controleer_wachtwoord(d_ww, docent.get("WachtwoordHash")):
-                        registreer_fout_inlog("docent")
-                        registreer_server_fout_inlog("docent", docent_id)
-                        st.error("Onjuiste inloggegevens.")
-                    elif docent.get("Goedgekeurd") == "Ja":
-                        reset_login_pogingen("docent")
-                        reset_server_login_pogingen("docent", docent_id)
-                        st.session_state.ingelogd = True
-                        st.session_state.rol = "docent"
-                        st.session_state.docent_id = docent_id
-                        st.session_state.docent_naam = docent["Naam"]
-                        st.session_state.docent_klassen = docent["Klassen"]
-                        st.rerun()
+                        if admin_ok:
+                            reset_login_pogingen("docent")
+                            st.session_state.ingelogd = True
+                            st.session_state.rol = "admin"
+                            st.session_state.docent_naam = "Beheerder"
+                            st.rerun()
+                        else:
+                            registreer_fout_inlog("docent")
+                            st.error("Onjuiste inloggegevens.")
                     else:
-                        st.error("Je account wacht nog op goedkeuring van de beheerder.")
+                        docent = haal_docent(docent_id)
+                        if docent and check_server_lockout("docent", docent_id):
+                            st.stop()
+                        if not docent or not controleer_wachtwoord(d_ww, docent.get("WachtwoordHash")):
+                            registreer_fout_inlog("docent")
+                            # Maak alleen een server-side lockoutrecord voor een bestaand account.
+                            if docent:
+                                registreer_server_fout_inlog("docent", docent_id)
+                            st.error("Onjuiste inloggegevens.")
+                        elif docent.get("Goedgekeurd") == "Ja":
+                            reset_login_pogingen("docent")
+                            reset_server_login_pogingen("docent", docent_id)
+                            st.session_state.ingelogd = True
+                            st.session_state.rol = "docent"
+                            st.session_state.docent_id = docent_id
+                            st.session_state.docent_naam = docent["Naam"]
+                            st.session_state.docent_klassen = docent["Klassen"]
+                            st.rerun()
+                        else:
+                            st.error("Je account wacht nog op goedkeuring van de beheerder.")
                 
     with tab_d_reg:
         with st.form("docent_reg_form"):
@@ -152,12 +157,14 @@ elif not st.session_state.get("ingelogd"):
                 
                 if submitted_login:
                     gebruikersnaam = login_gn.strip()
-                    if check_server_lockout("leerling", gebruikersnaam):
-                        st.stop()
                     gebruiker = haal_gebruiker(gebruikersnaam)
+                    if gebruiker and check_server_lockout("leerling", gebruikersnaam):
+                        st.stop()
                     if not gebruiker or not controleer_wachtwoord(login_ww, gebruiker.get("WachtwoordHash")):
                         registreer_fout_inlog("leerling")
-                        registreer_server_fout_inlog("leerling", gebruikersnaam)
+                        # Onbekende gebruikersnamen maken geen records in login_lockouts.
+                        if gebruiker:
+                            registreer_server_fout_inlog("leerling", gebruikersnaam)
                         st.error("❌ Onjuiste inloggegevens.")
                     else:
                         if gebruiker.get("Goedgekeurd", "Ja") == "Ja":
@@ -189,12 +196,14 @@ elif not st.session_state.get("ingelogd"):
                     else:
                         try:
                             maak_storing(
-                                titel=f"Inlogprobleem - {vergeten_naam.strip()}",
+                                titel="Privé inlogprobleem",
                                 omschrijving=vergeten_uitleg.strip(),
                                 categorie="Inloggen/account",
                                 voornaam=vergeten_naam.strip(),
                                 gebruikersnaam="",
                                 cluster=vergeten_klas,
+                                zichtbaar_voor_leerlingen=False,
+                                melder_key=f"inlog:{vergeten_klas}:{vergeten_naam.strip().lower()}",
                             )
                             st.success("✅ Je melding is verstuurd naar de beheerder.")
                         except Exception:

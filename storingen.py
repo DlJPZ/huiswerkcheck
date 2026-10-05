@@ -68,12 +68,14 @@ def valideer_bijlage(uploaded_file):
         raise ValueError("Het opgegeven bestandstype komt niet overeen met de werkelijke bestandsinhoud.")
 
 
-def haal_storingen(status=None):
+def haal_storingen(status=None, alleen_zichtbaar_voor_leerlingen=False):
     rijen = []
     while True:
         query = supabase.table("storingen").select("*")
         if status in STATUSSEN:
             query = query.eq("Status", status)
+        if alleen_zichtbaar_voor_leerlingen:
+            query = query.eq("ZichtbaarVoorLeerlingen", True)
         pagina = (
             query.order("Aangemaakt", desc=True)
             .range(len(rijen), len(rijen) + PAGE_SIZE - 1)
@@ -84,7 +86,8 @@ def haal_storingen(status=None):
         rijen.extend(pagina)
 
 
-def maak_storing(titel, omschrijving, categorie, voornaam, gebruikersnaam, cluster, uploaded_file=None):
+def maak_storing(titel, omschrijving, categorie, voornaam, gebruikersnaam, cluster, uploaded_file=None,
+                 zichtbaar_voor_leerlingen=True, melder_key=None):
     titel = (titel or "").strip()
     omschrijving = (omschrijving or "").strip()
     categorie = (categorie or "Overig").strip()
@@ -117,12 +120,29 @@ def maak_storing(titel, omschrijving, categorie, voornaam, gebruikersnaam, clust
         "Cluster": (cluster or "")[:80],
         "BijlagePad": bijlage_pad,
         "AdminNotitie": "",
+        "ZichtbaarVoorLeerlingen": bool(zichtbaar_voor_leerlingen),
     }
 
     try:
         response = supabase.table("storingen").insert(data).execute()
         if not response.data:
             raise RuntimeError("Supabase bevestigde de storingsmelding niet.")
+
+        # Leg de oorspronkelijke melder meteen vast, zodat deze niet daarna
+        # nogmaals op "Ik heb dit probleem ook" kan klikken. De SQL-trigger
+        # telt deze registratie bewust niet nog een tweede keer mee.
+        oorspronkelijke_melder = (melder_key or gebruikersnaam or "").strip()
+        if oorspronkelijke_melder:
+            try:
+                supabase.table("storing_bevestigingen").insert({
+                    "StoringID": storing_id,
+                    "MelderKey": oorspronkelijke_melder[:180],
+                    "IsOorspronkelijkeMelder": True,
+                }).execute()
+            except Exception:
+                # De storingsmelding zelf blijft geldig als de bevestigingstabel
+                # tijdens een migratie nog niet beschikbaar is.
+                pass
     except Exception:
         if bijlage_pad:
             try:
@@ -138,6 +158,7 @@ def bevestig_storing(storing_id, melder_key):
     payload = {
         "StoringID": str(storing_id),
         "MelderKey": (melder_key or "anoniem")[:180],
+        "IsOorspronkelijkeMelder": False,
     }
     try:
         response = supabase.table("storing_bevestigingen").insert(payload).execute()

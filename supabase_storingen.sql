@@ -15,10 +15,12 @@ create table if not exists public.storingen (
     "BijlagePad" text,
     "AdminNotitie" text not null default '',
     "OpgelostOp" timestamptz,
-    "MeldingenAantal" integer not null default 1
+    "MeldingenAantal" integer not null default 1,
+    "ZichtbaarVoorLeerlingen" boolean not null default true
 );
 
 alter table public.storingen add column if not exists "MeldingenAantal" integer not null default 1;
+alter table public.storingen add column if not exists "ZichtbaarVoorLeerlingen" boolean not null default true;
 alter table public.storingen enable row level security;
 
 create index if not exists storingen_status_aangemaakt_idx
@@ -28,8 +30,10 @@ create table if not exists public.storing_bevestigingen (
     "StoringID" text not null references public.storingen("StoringID") on delete cascade,
     "MelderKey" text not null,
     "Aangemaakt" timestamptz not null default now(),
+    "IsOorspronkelijkeMelder" boolean not null default false,
     primary key ("StoringID", "MelderKey")
 );
+alter table public.storing_bevestigingen add column if not exists "IsOorspronkelijkeMelder" boolean not null default false;
 alter table public.storing_bevestigingen enable row level security;
 
 create or replace function public.update_storing_meldingen_aantal()
@@ -40,14 +44,18 @@ set search_path = public
 as $$
 begin
     if tg_op = 'INSERT' then
-        update public.storingen
-        set "MeldingenAantal" = "MeldingenAantal" + 1
-        where "StoringID" = new."StoringID";
+        if not new."IsOorspronkelijkeMelder" then
+            update public.storingen
+            set "MeldingenAantal" = "MeldingenAantal" + 1
+            where "StoringID" = new."StoringID";
+        end if;
         return new;
     elsif tg_op = 'DELETE' then
-        update public.storingen
-        set "MeldingenAantal" = greatest(1, "MeldingenAantal" - 1)
-        where "StoringID" = old."StoringID";
+        if not old."IsOorspronkelijkeMelder" then
+            update public.storingen
+            set "MeldingenAantal" = greatest(1, "MeldingenAantal" - 1)
+            where "StoringID" = old."StoringID";
+        end if;
         return old;
     end if;
     return null;
