@@ -62,6 +62,11 @@ begin
 end;
 $$;
 
+-- Deze SECURITY DEFINER-functie is uitsluitend bedoeld voor de interne trigger.
+-- Intrekken van directe API-aanroepen verandert de bestaande triggerwerking niet.
+revoke execute on function public.update_storing_meldingen_aantal()
+    from public, anon, authenticated;
+
 drop trigger if exists storing_bevestiging_teller on public.storing_bevestigingen;
 create trigger storing_bevestiging_teller
 after insert or delete on public.storing_bevestigingen

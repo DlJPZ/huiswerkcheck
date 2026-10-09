@@ -30,6 +30,8 @@ Daarna kan de oude `ADMIN_WACHTWOORD` secret worden verwijderd.
 ## Beveiliging
 De app verwacht RLS op `gebruikers`, `docenten`, `resultaten`, `storingen`, `storing_bevestigingen` en `login_lockouts`. De Streamlit-server gebruikt uitsluitend de `sb_secret_...` sleutel.
 
+`supabase_security.sql` schakelt RLS ook in op de bestaande account- en resultaattabellen. `supabase_storingen.sql` ontneemt publieke en ingelogde API-gebruikers het rechtstreeks uitvoeren van de interne tellerfunctie. Deze scripts wijzigen pas de live database wanneer ze in Supabase worden uitgevoerd.
+
 ## Belangrijkste wijzigingen in 3.2.1
 - Codespaces en Streamlit starten via `main.py`.
 - Geen automatische A-keuze meer bij meerkeuzevragen; alle antwoorden moeten ingevuld zijn.
